@@ -1,0 +1,6 @@
+# Written by the engine when it loads the mod: the API types and the tsconfig
+# the root tsconfig.json extends.
+.claude-plugin/types/
+
+.vscode
+.DS_Store

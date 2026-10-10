@@ -1,0 +1,12 @@
+{
+  "name": "agent-state",
+  "description": "The agent-state mod: Claude's state in the iTerm2 tab subtitle.",
+  "owner": { "name": "M-i-k-e-l" },
+  "plugins": [
+    {
+      "name": "agent-state",
+      "source": "./",
+      "description": "Shows the state of Claude (working, permission, input, idle, background, compacting) in the iTerm2 tab subtitle."
+    }
+  ]
+}
