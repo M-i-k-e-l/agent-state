@@ -110,6 +110,17 @@ for the main agent and 🧵 for a background subagent, at the approval.
 
 ## Open
 
+- A session moved to the background (`/background`) goes on in a daemon's process with a terminal of its own, and an
+  environment without `TERM_PROGRAM`, `LC_TERMINAL` and `ITERM_SESSION_ID`; `ITERM_PROFILE` stays (observed). The mod
+  took that for another terminal and stopped writing, so the tab kept the state it had at the move. It now takes
+  `ITERM_PROFILE` alone as iTerm2, and its writes reach the tab the session is attached from (tried on 2.1.303). The
+  old process blanks the tab as it leaves, and the new one's 💤 is written before anyone attaches, so an attached tab
+  stays blank until the state next changes.
+- A dialog the engine opens by itself at the prompt ("Teach auto mode about your environment?", observed with the tab on
+  🧵) holds the prompt until the person answers, and subagents run on under it. It should show ❓, but nothing a mod may
+  read says it is up: no hook event, no render component, and `classic.Notification` is not known to fire for it. The
+  engine logs `tengu_auto_mode_env_onboarding_shown`, `_accept`, `_later` and `_dismiss` (names read from the binary) on
+  the `anthropic` telemetry stream, and a mod with a hook on that stream is not loaded: it is for the built-in plugins.
 - An "always allow" answer (`user_permanent`) has not been tried.
 - Ways of switching telemetry off other than `DISABLE_TELEMETRY=1` have not been tried.
 - Not known: whether the engine starts a second call while another call's dialog is up. If it does, one wrong case is

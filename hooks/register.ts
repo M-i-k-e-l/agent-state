@@ -26,8 +26,11 @@ const CLEARED = ''
 // A session with no person at the prompt writes only when AGENT_STATE_HEADLESS is
 // set: started from inside another session's tool, it would write over that
 // session's tab.
+// A session moved to the background (/background) goes on in a process whose environment
+// names no terminal at all, only the iTerm2 profile it was started under (observed).
 const EMIT = `
 case "$TERM_PROGRAM$LC_TERMINAL" in *iTerm*) iterm=1 ;; *) iterm=0 ;; esac
+if [ -z "$TERM_PROGRAM$LC_TERMINAL" ] && [ -n "$ITERM_PROFILE" ]; then iterm=1; fi
 off=
 if [ "$iterm" = 0 ]; then off='not iTerm2'; fi
 if [ "$6" = 1 ] && [ -z "$AGENT_STATE_HEADLESS" ]; then off='no person at the prompt'; fi

@@ -52,6 +52,10 @@ It starts a short shell process only when the state changes, about two for each 
 - An interrupted `/compact` may leave 📦 until the next event (untested).
 - If something else changes the tab's variable, the tab stays wrong until the state next changes.
 - A `claude -p` or SDK session shows nothing unless `AGENT_STATE_HEADLESS` is set.
+- A session moved to the background (`/background`) blanks the tab, and the tab you attach it from stays blank until
+  the state next changes.
+- A dialog Claude Code opens by itself at the prompt, such as "Teach auto mode about your environment?", leaves the tab
+  as it was: no event a mod may read says it is up.
 - Claude Code on a Linux machine, reached over SSH from iTerm2, shows nothing (read from the code, not tried).
 - Not tried: tmux inside iTerm2, and a permission dialog in auto mode.
 
