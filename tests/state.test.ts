@@ -215,7 +215,7 @@ test('a subagent waiting on its own background work keeps the tab on background'
   expect(writes.map(w => w.state)).toEqual(['⚙️ working', '🧵 background', '⚙️ working', '💤 idle'])
 })
 
-test('idle counts the background commands its last Stop listed, a subagent left out', async ($, on) => {
+test('idle counts the background shells its last Stop listed, a subagent and monitors left out', async ($, on) => {
   const writes: { state: string | undefined; note: string | undefined }[] = []
   on('process.run', (_$, e) => {
     writes.push({ state: e.argv[5], note: e.argv[10] })
@@ -231,7 +231,7 @@ test('idle counts the background commands its last Stop listed, a subagent left 
     })
 
   await $.turn.start({ text: 'hi', turnId: 't25' })
-  await stop(['shell', 'monitor', 'subagent'])
+  await stop(['shell', 'monitor', 'shell', 'subagent', 'monitor'])
   await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't25', reason: 'answer' })
   await $.turn.start({ text: 'hi', turnId: 't26' })
   await stop(['shell'])
@@ -242,10 +242,37 @@ test('idle counts the background commands its last Stop listed, a subagent left 
 
   expect(writes).toEqual([
     { state: '⚙️ working', note: '' },
-    { state: '💤 idle', note: '· 2 jobs' },
+    { state: '💤 idle', note: '⏳2' },
     { state: '⚙️ working', note: '' },
-    { state: '💤 idle', note: '· 1 job' },
+    { state: '💤 idle', note: '⏳1' },
     { state: '⚙️ working', note: '' },
     { state: '💤 idle', note: '' },
   ])
+})
+
+test("the main agent's turn end logs every entry its Stop listed, with its status", async ($, on) => {
+  const writes: Write[] = []
+  on('process.run', (_$, e) => {
+    writes.push(record(e.argv))
+    return { value: RAN }
+  })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('classic.Stop', () => ({}))
+
+  await $.turn.start({ text: 'hi', turnId: 't28' })
+  await $.classic.Stop({
+    stop_hook_active: false,
+    background_tasks: [
+      { id: 'b1', type: 'shell', status: 'running', description: 'sweep' },
+      { id: 'b2', type: 'subagent', status: 'pending', description: 'maker' },
+    ],
+  })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't28', reason: 'answer' })
+  // A turn with no Stop logs an empty list, not the last turn's.
+  await $.turn.start({ text: 'hi', turnId: 't29' })
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: 't29', reason: 'aborted' })
+
+  expect(writes[1]?.line).toContain('jobs=[shell:running,subagent:pending]')
+  expect(writes[3]?.line).toContain('jobs=[]')
 })

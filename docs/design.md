@@ -51,8 +51,9 @@ Rules:
 - A `turn.complete` for a turn that is no longer the current one is ignored: a prompt typed over a running turn starts
   the new turn before the old one's end is reported.
 - After a compaction the tab shows working if the turn is live, else idle or background.
-- Idle adds `· N job(s)` for the background work the main agent's last `classic.Stop` listed, subagents left out:
-  `$.agent.list()` counts those. A command may be a server that runs as long as the session, so it adds to idle and
+- Idle adds `⏳N` for the background shells the main agent's last `classic.Stop` listed. Subagents are left
+  out, as `$.agent.list()` counts those, and so are monitors: a session watching its published artifacts for comments
+  keeps one running for each (observed). A command may be a server that runs as long as the session, so it adds to idle and
   does not make it background. `classic.Stop` comes just before the main agent's `turn.complete` (observed); a turn's
   start clears the count, as an interrupted turn may raise no `Stop`.
 - The tty is found by walking up the process tree from the `$.process.run` child; writes are serialized.
@@ -86,7 +87,7 @@ Done by hand in iTerm2.
 | 21  | Background subagent needs permission, Esc     | ✅ 🔐 → 🧵 → ⚙️ → 💤                           |
 | 22  | Background subagent needs permission, approve | ✅ 🔐 → 🧵 at the approval → ⚙️ → 💤           |
 | 23  | Subagent's background shell outlives its turn | ✅ 🧵 → ⚙️ → 💤                                |
-| 24  | Main agent's background shell outlives a turn | ✅ 💤 `· 1 job` → ⚙️ → 💤                      |
+| 24  | Main agent's background shell outlives a turn | ✅ 💤 `⏳1` → ⚙️ → 💤                          |
 
 Ctrl+C has no effect on the question dialog or the permission dialog; the tab keeps the dialog's state, which is right.
 

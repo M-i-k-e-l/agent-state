@@ -88,9 +88,11 @@ let liveTurn: string | undefined
 // do not make it background. A turn's start clears the count, since an interrupted
 // turn may raise no Stop to list them again.
 let jobs = 0
+// Every entry of that Stop's list as type:status, subagents too, for the log line.
+let listed = ''
 
-// What idle adds for the background commands in flight.
-const jobsNote = (): string => (jobs === 0 ? '' : jobs === 1 ? '· 1 job' : `· ${jobs} jobs`)
+// What idle adds for the background commands in flight: an hourglass and their count.
+const jobsNote = (): string => (jobs === 0 ? '' : `⏳${jobs}`)
 
 // Writes the state to the tab; an event with no state leaves the tab alone, and so
 // does one whose state the tab already shows. A repeated idle keeps its first stamp.
@@ -165,6 +167,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     // A /clear ends the conversation, not the process, and no session.start follows.
     jobs = 0
+    listed = ''
     await emit($, `session.end reason=${e.reason}`, e.reason === 'clear' ? IDLE : CLEARED)
     return next(e)
   })
@@ -173,6 +176,7 @@ export const register: Register = on => {
     isTurnLive = true
     liveTurn = e.turnId
     jobs = 0
+    listed = ''
     await emit($, `turn.start turn=${e.turnId}`, active())
     return next(e)
   })
@@ -187,14 +191,19 @@ export const register: Register = on => {
     }
     // A subagent killed with its dialog up ends its turn without its tool returning.
     const state = isCurrent ? await resting($) : e.agentId !== undefined ? await settled($, e.agentId) : undefined
-    await emit($, `turn.complete agent=${who(e.agentId)} reason=${e.reason} turn=${e.turnId}`, state)
+    const tasks = isCurrent ? ` jobs=[${listed}]` : ''
+    await emit($, `turn.complete agent=${who(e.agentId)} reason=${e.reason} turn=${e.turnId}${tasks}`, state)
     return next(e)
   })
 
   // The main agent's Stop, raised just before its turn.complete (observed), lists the
-  // background work in flight; a subagent is counted from $.agent.list() instead.
+  // background work in flight. Only shells count: a subagent is counted from
+  // $.agent.list(), and a session watching its published artifacts for comments keeps
+  // a monitor running for each (observed).
   on('classic.Stop', async ($, e, next) => {
-    jobs = (e.background_tasks ?? []).filter(t => t.type !== 'subagent').length
+    const tasks = e.background_tasks ?? []
+    jobs = tasks.filter(t => t.type === 'shell').length
+    listed = tasks.map(t => `${t.type}:${t.status}`).join(',')
     return next(e)
   })
 
