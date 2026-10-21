@@ -117,11 +117,16 @@ const who = (agentId: string | undefined): string => agentId ?? 'main'
 // What a running main agent shows.
 const active = (): string => (waiting.size > 0 ? PERMISSION : WORKING)
 
+// The agent statuses that keep the tab on background. A subagent whose turn ended
+// with background work of its own still running is waiting, and reports when that
+// work ends (observed).
+const LIVE = new Set<unknown>(['running', 'pending', 'waiting'])
+
 // What the main agent rests in: background while a subagent of it still runs.
 const resting = async ($: EngineInterface): Promise<string> => {
   if (waiting.size > 0) return PERMISSION
   const agents = await $.agent.list().catch(() => [])
-  const live = agents.filter(a => a.status === 'running' || a.status === 'pending')
+  const live = agents.filter(a => LIVE.has(a.status))
   return live.length > 0 ? BACKGROUND : IDLE
 }
 

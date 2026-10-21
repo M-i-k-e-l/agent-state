@@ -191,3 +191,26 @@ test("the person's accept ends the permission state, for the main agent and for 
 
   expect(writes.map(w => w.state)).toEqual(['⚙️ working', '🔐 permission', '⚙️ working', '🔐 permission', '⚙️ working'])
 })
+
+test('a subagent waiting on its own background work keeps the tab on background', async ($, on) => {
+  const writes: Write[] = []
+  on('process.run', (_$, e) => {
+    writes.push(record(e.argv))
+    return { value: RAN }
+  })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  const statuses = ['waiting', 'completed'] as const
+  let call = 0
+  on('agent.list', () => {
+    const status = statuses[call++] ?? 'completed'
+    return { value: [{ id: 'a1', description: 'maker', type: 'general-purpose', status }] }
+  })
+
+  await $.turn.start({ text: 'hi', turnId: 't23' })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't23', reason: 'answer' })
+  await $.turn.start({ text: 'hi', turnId: 't24' })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't24', reason: 'answer' })
+
+  expect(writes.map(w => w.state)).toEqual(['⚙️ working', '🧵 background', '⚙️ working', '💤 idle'])
+})

@@ -37,7 +37,7 @@ states were skipped, had 3.5 writes a turn, a third of them repeats.
 | --------------------------- | ------------------------------------------------------------------------------- |
 | ⚙️ working                  | `turn.start`; a tool's return while the turn is live; an approval (see below)   |
 | 💤 idle, with date and time | `turn.complete` of the current turn; `session.start`; `session.end` on `/clear` |
-| 🧵 background               | `turn.complete` while `$.agent.list()` has a running or pending agent           |
+| 🧵 background               | `turn.complete` while `$.agent.list()` has a running, pending or waiting agent  |
 | 🔐 permission               | `classic.PermissionRequest`, main agent or subagent, tool not `AskUserQuestion` |
 | ❓ input                    | the main agent's `tool.call` on `AskUserQuestion`, before `next`                |
 | 📦 compacting               | the main agent's `session.compact`, trigger not `precompute`, before `next`     |
@@ -81,6 +81,7 @@ Done by hand in iTerm2.
 | 20  | Kill a task from `/tasks`                     | ✅ 🧵 → ⚙️ → 💤                                |
 | 21  | Background subagent needs permission, Esc     | ✅ 🔐 → 🧵 → ⚙️ → 💤                           |
 | 22  | Background subagent needs permission, approve | ✅ 🔐 → 🧵 at the approval → ⚙️ → 💤           |
+| 23  | Subagent's background shell outlives its turn | ✅ 🧵 → ⚙️ → 💤                                |
 
 Ctrl+C has no effect on the question dialog or the permission dialog; the tab keeps the dialog's state, which is right.
 
