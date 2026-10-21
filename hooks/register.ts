@@ -16,7 +16,7 @@ const CLEARED = ''
 
 // $1 variable, $2 the state, $3 "1" to stamp the state with the date and time,
 // $4 the tty a write before this one found, or empty, $5 log line, $6 "1" when no
-// person is at the prompt (a -p run or the SDK).
+// person is at the prompt (a -p run or the SDK), $7 text to put after the stamp, or empty.
 // The child has no controlling terminal of its own, so without $4 the tty is found
 // by walking up the process tree to the first ancestor that has one (claude, then
 // its shell). Prints the tty it used, for the next write to pass back. Exits 0 when
@@ -46,6 +46,7 @@ if [ -z "$off" ] && [ "$tty" = none ]; then
 fi
 state="$2"
 if [ "$3" = 1 ]; then state="$state $(LC_ALL=C date '+%b %-d %H:%M')"; fi
+if [ -n "$7" ]; then state="$state $7"; fi
 rc=-
 if [ -n "$off" ]; then rc="off, $off"; fi
 if [ -z "$off" ] && [ "$tty" != none ]; then
@@ -82,23 +83,34 @@ let isHeadless = false
 let isTurnLive = false
 // The main agent's running turn, by id; undefined between turns and after a reload.
 let liveTurn: string | undefined
+// The background commands in flight, as the main agent's last Stop listed them: one
+// of them may be a server that runs as long as the session, so they add to idle and
+// do not make it background. A turn's start clears the count, since an interrupted
+// turn may raise no Stop to list them again.
+let jobs = 0
+
+// What idle adds for the background commands in flight.
+const jobsNote = (): string => (jobs === 0 ? '' : jobs === 1 ? '· 1 job' : `· ${jobs} jobs`)
 
 // Writes the state to the tab; an event with no state leaves the tab alone, and so
 // does one whose state the tab already shows. A repeated idle keeps its first stamp.
 const emit = ($: EngineInterface, line: string, state: string | undefined): Promise<unknown> => {
   if (state === undefined || isOff) return Promise.resolve()
   const at = Date.now() - loaded
+  const note = state === IDLE ? jobsNote() : ''
+  const shows = `${state}${note}`
   queue = queue.then(async () => {
-    if (state === shown || isOff) return
+    if (shows === shown || isOff) return
     seq += 1
     const stamped = `#${seq} +${at}ms ${line}`
-    const argv = ['sh', '-c', EMIT, 'sh', VAR, state, state === IDLE ? '1' : '0', tty ?? '', stamped, isHeadless ? '1' : '0']
+    const stamp = state === IDLE ? '1' : '0'
+    const argv = ['sh', '-c', EMIT, 'sh', VAR, state, stamp, tty ?? '', stamped, isHeadless ? '1' : '0', note]
     const ran = await $.process.run(argv, { timeoutMs: 5000 }).catch(() => undefined)
     // A failed search prints "none": caching that would stop every later write.
     const found = ran?.stdout.trim()
     if (found?.startsWith('/dev/')) tty = found
     // A write that failed leaves the tab unknown, so the next one goes out whatever it is.
-    shown = ran?.exitCode === 0 ? state : undefined
+    shown = ran?.exitCode === 0 ? shows : undefined
     if (ran?.exitCode === 2) isOff = true
   })
   return queue
@@ -152,6 +164,7 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     // A /clear ends the conversation, not the process, and no session.start follows.
+    jobs = 0
     await emit($, `session.end reason=${e.reason}`, e.reason === 'clear' ? IDLE : CLEARED)
     return next(e)
   })
@@ -159,6 +172,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     isTurnLive = true
     liveTurn = e.turnId
+    jobs = 0
     await emit($, `turn.start turn=${e.turnId}`, active())
     return next(e)
   })
@@ -174,6 +188,13 @@ export const register: Register = on => {
     // A subagent killed with its dialog up ends its turn without its tool returning.
     const state = isCurrent ? await resting($) : e.agentId !== undefined ? await settled($, e.agentId) : undefined
     await emit($, `turn.complete agent=${who(e.agentId)} reason=${e.reason} turn=${e.turnId}`, state)
+    return next(e)
+  })
+
+  // The main agent's Stop, raised just before its turn.complete (observed), lists the
+  // background work in flight; a subagent is counted from $.agent.list() instead.
+  on('classic.Stop', async ($, e, next) => {
+    jobs = (e.background_tasks ?? []).filter(t => t.type !== 'subagent').length
     return next(e)
   })
 

@@ -214,3 +214,38 @@ test('a subagent waiting on its own background work keeps the tab on background'
 
   expect(writes.map(w => w.state)).toEqual(['⚙️ working', '🧵 background', '⚙️ working', '💤 idle'])
 })
+
+test('idle counts the background commands its last Stop listed, a subagent left out', async ($, on) => {
+  const writes: { state: string | undefined; note: string | undefined }[] = []
+  on('process.run', (_$, e) => {
+    writes.push({ state: e.argv[5], note: e.argv[10] })
+    return { value: RAN }
+  })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('classic.Stop', () => ({}))
+  const stop = (types: string[]) =>
+    $.classic.Stop({
+      stop_hook_active: false,
+      background_tasks: types.map((type, i) => ({ id: `b${i}`, type, status: 'running', description: type })),
+    })
+
+  await $.turn.start({ text: 'hi', turnId: 't25' })
+  await stop(['shell', 'monitor', 'subagent'])
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't25', reason: 'answer' })
+  await $.turn.start({ text: 'hi', turnId: 't26' })
+  await stop(['shell'])
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't26', reason: 'answer' })
+  // An interrupted turn raises no Stop: its start cleared the count.
+  await $.turn.start({ text: 'hi', turnId: 't27' })
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: 't27', reason: 'aborted' })
+
+  expect(writes).toEqual([
+    { state: '⚙️ working', note: '' },
+    { state: '💤 idle', note: '· 2 jobs' },
+    { state: '⚙️ working', note: '' },
+    { state: '💤 idle', note: '· 1 job' },
+    { state: '⚙️ working', note: '' },
+    { state: '💤 idle', note: '' },
+  ])
+})

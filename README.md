@@ -14,6 +14,7 @@ may change between releases.
 | 🔐 permission          | A permission dialog is waiting for you, the main agent's or a subagent's |
 | ❓ input               | A question dialog is waiting for you                                     |
 | 💤 idle `Oct 10 12:40` | Nothing is running, since that time                                      |
+| 💤 idle `… · 1 job`    | Waiting for you, with a background command still running                 |
 | 🧵 background          | Main agent is idle, a subagent is running                                |
 | 📦 compacting          | The conversation is being compacted                                      |
 | (blank)                | The session ended                                                        |

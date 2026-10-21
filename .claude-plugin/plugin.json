@@ -1,6 +1,6 @@
 {
   "name": "agent-state",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Shows the state of Claude (working, permission, input, idle, background, compacting) in the iTerm2 tab subtitle.",
   "author": { "name": "M-i-k-e-l" },
   "license": "MIT"
