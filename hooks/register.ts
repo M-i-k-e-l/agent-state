@@ -28,6 +28,9 @@ const CLEARED = ''
 // session's tab.
 // A session moved to the background (/background) goes on in a process whose environment
 // names no terminal at all, only the iTerm2 profile it was started under (observed).
+// A write that lands inside Claude Code's own title write is taken as title text and
+// lost (observed), so a write that went out is sent again half a second later, unless
+// a newer one has gone out to that tty since: the mark file names the latest.
 const EMIT = `
 case "$TERM_PROGRAM$LC_TERMINAL" in *iTerm*) iterm=1 ;; *) iterm=0 ;; esac
 if [ -z "$TERM_PROGRAM$LC_TERMINAL" ] && [ -n "$ITERM_PROFILE" ]; then iterm=1; fi
@@ -50,8 +53,22 @@ if [ -n "$7" ]; then state="$state $7"; fi
 rc=-
 if [ -n "$off" ]; then rc="off, $off"; fi
 if [ -z "$off" ] && [ "$tty" != none ]; then
-  printf '\\033]1337;SetUserVar=%s=%s\\007' "$1" "$(printf '%s' "$state" | base64 | tr -d '\\n')" > "$tty" 2>/dev/null
+  esc=$(printf '\\033]1337;SetUserVar=%s=%s\\007' "$1" "$(printf '%s' "$state" | base64 | tr -d '\\n')")
+  printf '%s' "$esc" > "$tty" 2>/dev/null
   rc=$?
+fi
+if [ "$rc" = 0 ]; then
+  mark="\${TMPDIR:-/tmp}/agent-state.$(basename "$tty")"
+  printf '%s' "$$" > "$mark"
+  (
+    sleep 0.5
+    if [ "$(cat "$mark" 2>/dev/null)" != "$$" ]; then exit 0; fi
+    printf '%s' "$esc" > "$tty" 2>/dev/null
+    again=$?
+    if [ -n "$AGENT_STATE_LOG" ]; then
+      printf '%s %s again rc=%s\\n' "$(date '+%H:%M:%S')" "\${5%% *}" "$again" >> "$AGENT_STATE_LOG"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
 fi
 if [ -n "$AGENT_STATE_LOG" ]; then
   printf '%s %s tty=%s wrote=[%s] rc=%s\\n' "$(date '+%H:%M:%S')" "$5" "$tty" "$state" "$rc" >> "$AGENT_STATE_LOG"

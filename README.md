@@ -75,7 +75,7 @@ Two environment variables, both unset by default:
 
 | Variable               | Effect when set                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------- |
-| `AGENT_STATE_LOG`      | Names a file; the mod appends one line to it for each write it attempts                 |
+| `AGENT_STATE_LOG`      | Names a file; the mod appends one line to it for each write it attempts, and repeats    |
 | `AGENT_STATE_HEADLESS` | Lets a session with no person at the prompt (`claude -p`, the SDK) write to the tab too |
 
 A `claude -p` run stays silent by default because one started from inside another session's tool call would write over

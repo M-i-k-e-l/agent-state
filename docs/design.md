@@ -13,13 +13,15 @@ waits. A background subagent's report starts a turn too, with no prompt typed.
 | Only a `/dev/` tty is cached              | the search is two thirds of a write; a cached miss would stop them all |
 | Repeated states are not written           | each write starts a process; about a third repeated the last one       |
 | The log switch is an environment variable | the module runs with no Node; the script can read the environment      |
+| Each write is sent again 0.5s later       | a write inside Claude Code's title write is lost (see The repeat)      |
 
 ## Cost
 
-Each write to the tab starts one short shell process. Script timings are 40 runs each from a shell, with the tty three
-levels up the process tree. The scripted turn is a `claude -p` run with two shell tool calls; its count includes the
-session's start and end. The average real turn is computed, not counted: a log of 119 real turns, taken before repeated
-states were skipped, had 3.5 writes a turn, a third of them repeats.
+Each write to the tab starts one short shell process, which leaves a sleeping one behind for the repeat. Script timings
+are 40 runs each from a shell, with the tty three levels up the process tree. The scripted turn is a `claude -p` run
+with two shell tool calls; its count includes the session's start and end. The average real turn is computed, not
+counted: a log of 119 real turns, taken before repeated states were skipped, had 3.5 writes a turn, a third of them
+repeats.
 
 | Time                    | ms  |
 | ----------------------- | --- |
@@ -97,6 +99,17 @@ leave 🧵 until the next event; not observed.
 
 Row 21: after Esc the subagent is still running while it writes its report, hence 🧵; its report then starts a main turn
 (⚙️ → 💤).
+
+## The repeat
+
+Claude Code sets the tab title as it redraws, and both it and the mod write to the same terminal. A write of the mod's
+that lands inside a title write is taken as title text: the variable keeps its old state, and the title ends with
+`1337;SetUserVar=…` (observed once, a tab left on ⚙️ after its turn ended). So each write that went out is sent again
+half a second later, unless a newer write has gone out to that tty since; a mark file in `$TMPDIR` names the latest.
+The repeat is logged as `#N again`.
+
+A stress test in a spare tab, one process writing frames with title sequences every 2ms and the variable read back
+through AppleScript after each write, lost 46 to 48 of 100 single writes and none of 100 with the repeat.
 
 ## The approval signal
 
