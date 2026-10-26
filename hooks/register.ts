@@ -190,6 +190,9 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // A subagent's turn starts too, also when SendMessage wakes it while the main
+    // turn runs (observed): taken for the main turn's, it made that turn's end look late.
+    if (e.agentId !== undefined) return next(e)
     isTurnLive = true
     liveTurn = e.turnId
     jobs = 0

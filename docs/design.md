@@ -51,7 +51,8 @@ Rules:
   since it is the person the session waits on. The mod remembers which subagents have a dialog up; 🔐 holds over
   working, background and idle until the person approves it, that subagent's tool returns or its turn ends.
 - A `turn.complete` for a turn that is no longer the current one is ignored: a prompt typed over a running turn starts
-  the new turn before the old one's end is reported.
+  the new turn before the old one's end is reported. Only the main agent's `turn.start` makes a turn current; a
+  subagent's comes during the main turn when `SendMessage` wakes it (observed).
 - After a compaction the tab shows working if the turn is live, else idle or background.
 - Idle adds `⏳N` for the background shells the main agent's last `classic.Stop` listed. Subagents are left
   out, as `$.agent.list()` counts those, and so are monitors: a session watching its published artifacts for comments

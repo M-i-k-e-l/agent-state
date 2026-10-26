@@ -276,3 +276,21 @@ test("the main agent's turn end logs every entry its Stop listed, with its statu
   expect(writes[1]?.line).toContain('jobs=[shell:running,subagent:pending]')
   expect(writes[3]?.line).toContain('jobs=[]')
 })
+
+test("a subagent's turn starting during the main turn leaves the main turn's end in force", async ($, on) => {
+  const writes: Write[] = []
+  on('process.run', (_$, e) => {
+    writes.push(record(e.argv))
+    return { value: RAN }
+  })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+
+  // SendMessage wakes a subagent, whose reply comes while the main turn still runs.
+  await $.turn.start({ text: 'report', turnId: 't30' })
+  await $.turn.start({ text: 'two', turnId: 't31', agentId: 'a1' })
+  await $.turn.complete({ answer: 'two', durationMs: 5, isAborted: false, turnId: 't31', reason: 'answer', agentId: 'a1' })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't30', reason: 'answer' })
+
+  expect(writes.map(w => w.state)).toEqual(['⚙️ working', '💤 idle'])
+})
