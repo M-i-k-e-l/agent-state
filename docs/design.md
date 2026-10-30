@@ -129,6 +129,43 @@ for the main agent and 🧵 for a background subagent, at the approval.
   that a call has started. But it does not say who approved the call, and with several calls in flight it may belong to
   a call other than the one whose dialog is up, so 🔐 could clear early.
 
+## The desktop app
+
+The same state logic feeds a second output. A session the app hosts (`CLAUDE_CODE_HOST_SESSION_ID` is set) writes its
+state to `~/.claude/agent-state/<id>.json`; any other session writes no file, and the tab's write is as it was. A session
+there starts with `surface` null and `isInteractive` false, so the tab's script turns itself off at the first write,
+and the file write stands ahead of that gate.
+
+| Decision                                     | Why                                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| The app's list decides what shows            | a file says neither that a session was archived nor what it is called   |
+| A listed session with no live file is idle   | the app stops the process of a session left alone; its file says ended  |
+| Names come from the app                      | `session_title` can be the session it was started from (observed)       |
+| The mod's own fetches skip its `tool.call`   | the engine raises it on the main loop; its end wrote ⚙️ over ❓ and 🔐  |
+| A resumed idle dates from the last answer    | `seconds_since_last_response` says when; the restart is not when        |
+| The last list is saved for the next process  | the first draw need not wait for a fetch                                |
+| One file holds the pane's open or closed     | a pane belongs to a session; each follows the file on a one second timer |
+| A session with no surface does not follow it | it would try to open the pane every second, and fail                    |
+| A click opens a session through `open`       | a pane draws only an `https:` link; the app's link is `claude://`       |
+
+What the app draws (observed):
+
+- A `Button` is one line of plain text. It ignores the `Text` in it, line breaks and color.
+- Under the prompt, every `Button` is a gray chip, whichever props it has. In a pane, a `plain` one has no chip.
+- `Text` outside a `Button` honors `dimColor`, `size`, `weight` and `color`. `Box` borders draw in a pane.
+- `SessionMode` is drawn at the right of the line under the prompt, beside the model. A `Client` draws in `AbovePrompt`,
+  and nothing shows in `SessionMode` with one in its tree.
+- The app's own panel and sidebar take nothing from a mod. A pane docks at the right, and covers the app's panel when
+  the window is narrow.
+
+The projects' first order, Z to A with This computer last, is read off one sidebar; the app tells no one its order. The
+pane opens within 0.3 seconds of the mod loading (one log), so the wait on a session whose process has stopped lies
+outside the mod.
+
+Done by hand in the app: the states, the count on the button, a question and a permission dialog held through fetches,
+a click on a session and on the button, the arrows, and the pane following across sessions. Not tried: closing the pane
+with its own close mark, as the test kit cannot act as a person there either.
+
 ## Open
 
 - A session moved to the background (`/background`) goes on in a daemon's process with a terminal of its own, and an
