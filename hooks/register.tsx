@@ -118,8 +118,8 @@ const jobsNote = (): string => (jobs === 0 ? '' : `⏳${jobs}`)
 const FOLDER = '.claude/agent-state'
 
 // What a session's file holds. `since` is when the state began; `state` is empty
-// once the session ended.
-type Filed = { state: string; note: string; since: number; title?: string; cwd: string; updated: number }
+// once the session ended; `prompted` is when the person last sent it a message.
+type Filed = { state: string; note: string; since: number; title?: string; cwd: string; updated: number; prompted?: number }
 
 // This session's file, set at session.start; undefined when it writes none: any
 // session the desktop app does not host, such as one in an iTerm2 tab, whose
@@ -130,6 +130,11 @@ let cwd = ''
 let title: string | undefined
 // What the file holds, as last written; undefined after a reload.
 let filed: Filed | undefined
+// The state last asked of the file, which a write still queued may not have reached.
+let asked: { state: string; note: string } | undefined
+// When the person last sent this session a message; a restart reads it back from
+// the file before the first write.
+let prompted: number | undefined
 let fileQueue: Promise<unknown> = Promise.resolve()
 // When a resumed session last answered, as its SessionStart said, until its first
 // turn: the app restarts a session's process often (reopened, returned to), and
@@ -152,13 +157,14 @@ const logLine = async ($: EngineInterface, text: string): Promise<void> => {
 // Writes the state to the session's file, unless it already holds it. A repeated
 // idle keeps its first `since`. `line` names the event, for the log.
 const toFile = ($: EngineInterface, line: string, state: string, note: string, isForced = false): Promise<unknown> => {
+  asked = { state, note }
   fileQueue = fileQueue.then(async () => {
     if (file === undefined) return
     if (!isForced && filed?.state === state && filed.note === note) return
     const now = Date.now()
     const kept = filed?.state === state ? filed.since : now
     const since = state === IDLE && lastAnswer !== undefined ? Math.min(kept, lastAnswer) : kept
-    const next: Filed = { state, note, since, title, cwd, updated: now }
+    const next: Filed = { state, note, since, title, cwd, updated: now, prompted }
     const isWritten = await $.fs.write(file, JSON.stringify(next)).then(
       () => true,
       () => false,
@@ -358,7 +364,8 @@ const sessionRows = async ($: EngineInterface): Promise<Row[]> => {
   return [...appSessions].map(([id, app]) => {
     const row = byId.get(id)
     if (row !== undefined && row.filed.state !== CLEARED) return row
-    return { id, filed: { state: IDLE, note: '', since: app.lastActivity, cwd: app.cwd, updated: 0 } }
+    const filed = { state: IDLE, note: '', since: app.lastActivity, cwd: app.cwd, updated: 0, prompted: row?.filed.prompted }
+    return { id, filed }
   })
 }
 
@@ -449,6 +456,47 @@ const move = async ($: EngineInterface, shown: string[], heading: string, by: -1
   $.ui.invalidate('ui.render')
 }
 
+// Whether the pane lists the sessions by time instead of under their projects is
+// one choice for every session's pane, kept in the plugin's store: `false` by
+// project, anything else by time.
+const BY_TIME = 'isByTime'
+
+const readByTime = async ($: EngineInterface): Promise<boolean> =>
+  (await $.store.get(BY_TIME).catch(() => undefined)) !== false
+
+const chooseByTime = async ($: EngineInterface, isByTime: boolean): Promise<void> => {
+  await $.store.set(BY_TIME, isByTime).catch(() => undefined)
+  $.ui.invalidate('ui.render')
+}
+
+// When the app last saw the session active. The file's `updated` stands in only
+// without the app's list: a process the app restarts writes it (observed).
+const activeAt = (row: Row): number => appSessions?.get(row.id)?.lastActivity ?? row.filed.updated
+
+// When the person last used the session: their last message, or its last activity
+// for a session that has not recorded one yet.
+const usedAt = (row: Row): number => row.filed.prompted ?? activeAt(row)
+
+const RECENT_WINDOW = 2 * 60 * 60 * 1000
+
+// The boxes of the time view, each newest message first. Recent runs from the latest
+// message back two hours, and also holds what ran in that time or has not come to
+// rest, whenever its own last message was. A box with no session is left out.
+const byTime = (rows: Row[], now: number): [string, Row[]][] => {
+  const from = Math.max(...rows.map(usedAt)) - RECENT_WINDOW
+  const midnight = new Date(now).setHours(0, 0, 0, 0)
+  const sorted = [...rows].sort((a, b) => usedAt(b) - usedAt(a))
+  const isRecent = (row: Row): boolean => row.filed.state !== IDLE || activeAt(row) >= from || usedAt(row) >= from
+  const recent = sorted.filter(isRecent)
+  const rest = sorted.filter(row => !isRecent(row))
+  const boxes: [string, Row[]][] = [
+    ['Recent', recent],
+    ['Today', rest.filter(row => usedAt(row) >= midnight)],
+    ['Older', rest.filter(row => usedAt(row) < midnight)],
+  ]
+  return boxes.filter(([, inBox]) => inBox.length > 0)
+}
+
 // The app's title for the session; the one Claude Code reported can be another
 // session's, such as the one it was started from (observed).
 const nameOf = (row: Row): string =>
@@ -504,7 +552,20 @@ const togglePane = async ($: EngineInterface): Promise<unknown> => {
 const retitle = async ($: EngineInterface, named: string | undefined): Promise<unknown> => {
   if (named === undefined || named === '' || named === title) return
   title = named
-  if (filed !== undefined) await toFile($, 'retitle', filed.state, filed.note, true)
+  if (asked !== undefined) await toFile($, 'retitle', asked.state, asked.note, true)
+}
+
+// Reads back when the person last messaged this session, as an earlier process
+// filed it. A message sent meanwhile stands.
+const loadPrompted = async ($: EngineInterface): Promise<void> => {
+  const text = file === undefined ? undefined : await $.fs.read(file).catch(() => undefined)
+  if (typeof text !== 'string') return
+  try {
+    const saved = (JSON.parse(text) as Filed).prompted
+    if (prompted === undefined && typeof saved === 'number') prompted = saved
+  } catch {
+    // No file yet, or one caught mid-write: the next message sets it.
+  }
 }
 
 export const register: Register = on => {
@@ -519,6 +580,7 @@ export const register: Register = on => {
     own = host
     file = folder !== undefined && host !== undefined ? `${folder}/${host}.json` : undefined
     filed = undefined
+    await loadPrompted($)
     await emit($, `session.start surface=${e.surface} interactive=${e.isInteractive}`, IDLE)
     return started
   })
@@ -536,7 +598,9 @@ export const register: Register = on => {
   })
 
   on('classic.UserPromptSubmit', ($, e, next) => {
+    prompted = Date.now()
     void retitle($, e.session_title)
+    if (asked !== undefined) void toFile($, 'prompt', asked.state, asked.note, true)
     return next(e)
   })
 
@@ -585,6 +649,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const rows = await sessionRows($)
+    const isByTime = await readByTime($)
     rows.sort((a, b) => rank(a.filed.state) - rank(b.filed.state) || b.filed.since - a.filed.since)
     const now = Date.now()
     const groups = new Map<string, Row[]>()
@@ -592,7 +657,8 @@ export const register: Register = on => {
     const headings = ordered([...groups.keys()], await readOrder($))
     // Each session is its name as a title, a button, then its state and how long
     // it lasted as a subtitle under it, the state in color when it is urgent. The
-    // session the pane is in has a pointer before its name. Inside a button the
+    // session the pane is in has a pointer before its name. Listed by time, no card
+    // names its project, so a line between the two does. Inside a button the
     // app draws one line of plain text, whatever the Text in it asks for (observed).
     const session = (row: Row) => {
       const { state, note, since } = row.filed
@@ -607,6 +673,11 @@ export const register: Register = on => {
           <Button key={row.id} plain onPress={show}>
             {row.id === own ? `› ${nameOf(row)}` : nameOf(row)}
           </Button>
+          {isByTime && (
+            <Text dimColor size="footnote">
+              {projectOf(row)}
+            </Text>
+          )}
           <Box>
             {color === undefined ? (
               <Text dimColor size="footnote">
@@ -625,10 +696,39 @@ export const register: Register = on => {
       )
     }
     // Each project is a card with rounded corners, as the app's own panel draws them.
+    // The two buttons above them pick the view. The elements hold no segmented
+    // control, so a border around both is its track, the one in force a primary chip
+    // and the other plain, with none. The app's own header above takes nothing from a mod.
     return (
       <Box flexDirection="column" gap={1}>
         {rows.length === 0 && <Text dimColor>No session has written its state yet.</Text>}
-        {headings.map((heading, index) => (
+        {rows.length > 0 && (
+          <Box alignSelf="flex-start" alignItems="center" borderStyle="round" borderColor="subtle" padding={0}>
+            <Button
+              key="view:time"
+              label="Time"
+              variant="primary"
+              plain={isByTime ? undefined : true}
+              onPress={() => void chooseByTime($, true)}
+            />
+            <Button
+              key="view:projects"
+              label="Projects"
+              variant="primary"
+              plain={isByTime ? true : undefined}
+              onPress={() => void chooseByTime($, false)}
+            />
+          </Box>
+        )}
+        {isByTime && byTime(rows, now).map(([heading, inBox]) => (
+          <Box flexDirection="column" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
+            <Text dimColor weight="medium">
+              {heading}
+            </Text>
+            {inBox.map(session)}
+          </Box>
+        ))}
+        {!isByTime && headings.map((heading, index) => (
           <Box flexDirection="column" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
             <Box gap={1}>
               <Text dimColor weight="medium">

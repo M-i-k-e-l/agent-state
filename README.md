@@ -52,6 +52,15 @@ The pane lists the sessions under their projects, each with its name, its state 
 The session you are in has a `›` before its name. Clicking a name opens that session. The ↑ and ↓ next to a project move
 it up and down, for every session too.
 
+**Time** and **Projects** at the top of the pane pick the view, for every session. **Time**, the default, shows three boxes, each ordered
+by your last message, newest first, with each session's project on a line of its own:
+
+- **Recent**: your latest message and the 2 hours before it, plus any session that ran in that time or is not idle.
+- **Today**: the rest from today.
+- **Older**: everything else.
+
+A session with no message on record yet uses its last activity instead.
+
 ## What it reads
 
 The mod reads Claude Code's `tool_decision` telemetry records to see the moment you approve a permission dialog; no
@@ -59,8 +68,8 @@ other event says so. It reads them and changes none, and it sends nothing anywhe
 prints "hooks telemetry for: collector". It works with `DISABLE_TELEMETRY=1` set.
 
 In the desktop app it also reads the list of sessions through the app's own session tools, and keeps what the sessions
-share on your machine: each session's state in `~/.claude/agent-state/`, and the pane's order, open or closed choice and
-last list in `~/.claude/agent-state.*.json`.
+share on your machine: each session's state in `~/.claude/agent-state/`, the pane's order, open or closed choice and last list in
+`~/.claude/agent-state.*.json`, and the pane's view in the plugin's own store.
 
 ## How it works
 

@@ -147,6 +147,11 @@ and the file write stands ahead of that gate.
 | One file holds the pane's open or closed     | a pane belongs to a session; each follows the file on a one second timer |
 | A session with no surface does not follow it | it would try to open the pane every second, and fail                    |
 | A click opens a session through `open`       | a pane draws only an `https:` link; the app's link is `claude://`       |
+| The plugin's store holds the pane's view     | every session's pane shows one view; a choice made in one held when moving to another (observed) |
+| The view is two buttons in one border, the chosen one primary, the other plain | a mod's elements hold no segmented control |
+| Order and boxes use the person's last message | `lastActivityAt` moves while a session works, so rows would move under the pointer |
+| Activity or a state other than idle puts a session in Recent | a session running or waiting must not sink below what the person last messaged |
+| A file's `updated` does not stand for activity while the app's list is known | it moves when the app restarts the process (observed) |
 
 What the app draws (observed):
 
@@ -163,7 +168,7 @@ pane opens within 0.3 seconds of the mod loading (one log), so the wait on a ses
 outside the mod.
 
 Done by hand in the app: the states, the count on the button, a question and a permission dialog held through fetches,
-a click on a session and on the button, the arrows, and the pane following across sessions. Not tried: closing the pane
+a click on a session and on the button, the arrows, the pane following across sessions, and the view holding across sessions. Not tried: closing the pane
 with its own close mark, as the test kit cannot act as a person there either.
 
 ## Open
