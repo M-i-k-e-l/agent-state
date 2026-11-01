@@ -501,6 +501,83 @@ test('by time, the boxes rank by the last message, and Recent holds what still r
   await ui.unmount()
 })
 
+test('in both views, waiting on the person is error, others success until idle, then warning in Recent and dim outside it', async ($, on) => {
+  const now = Date.now()
+  const hours = (count: number): number => now - count * 60 * 60 * 1000
+  const filed = (state: string, cwd: string, prompted: number): string =>
+    JSON.stringify({ state, note: '', since: now, cwd, updated: now, prompted })
+  const alpha = '/Users/me/Dev/alpha'
+  // Alone in its project, so a rule read per project would call it Recent.
+  const beta = '/Users/me/Dev/beta'
+  const folder = '/Users/me/.claude/agent-state'
+  const files = new Map([
+    [`${folder}/local_latest.json`, filed('💤 idle', alpha, hours(0))],
+    [`${folder}/local_ran.json`, filed('💤 idle', alpha, hours(3.5))],
+    [`${folder}/local_today.json`, filed('💤 idle', alpha, hours(3))],
+    [`${folder}/local_older.json`, filed('💤 idle', beta, hours(30))],
+    // Old messages: what has not come to rest takes its color whenever it was sent.
+    [`${folder}/local_working.json`, filed('⚙️ working', alpha, hours(30))],
+    [`${folder}/local_permission.json`, filed('🔐 permission', alpha, hours(30))],
+    [`${folder}/local_input.json`, filed('❓ input', alpha, hours(30))],
+    [`${folder}/local_background.json`, filed('🧵 background', alpha, hours(30))],
+    [`${folder}/local_compacting.json`, filed('📦 compacting', alpha, hours(30))],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const listed = [
+    LISTED('local_latest', alpha, hours(0)),
+    LISTED('local_ran', alpha, hours(1.5)),
+    LISTED('local_today', alpha, hours(3)),
+    LISTED('local_older', beta, hours(30)),
+    LISTED('local_working', alpha, hours(30)),
+    LISTED('local_permission', alpha, hours(30)),
+    LISTED('local_input', alpha, hours(30)),
+    LISTED('local_background', alpha, hours(30)),
+    LISTED('local_compacting', alpha, hours(30)),
+    // No file, so idle, and dim like any other idle outside Recent.
+    LISTED('local_unfiled', alpha, hours(5)),
+  ]
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? listed : {}) }],
+    },
+  }))
+  const state = /^(💤 idle|⚙️ working|🔐 permission|❓ input|🧵 background|📦 compacting)$/
+  const error = { color: 'error', dimColor: undefined }
+  const success = { color: 'success', dimColor: undefined }
+  const warning = { color: 'warning', dimColor: undefined }
+  const dim = { color: undefined, dimColor: true }
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  for (const isByTime of [true, false]) {
+    files.set('store:isByTime', String(isByTime))
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const names = await ui.findAll({ type: 'Button', text: /^local_/ })
+    const states = await ui.findAll({ type: 'Text', text: state })
+    // Each row draws its name, then its state, so the two lists pair up.
+    expect(states.length).toBe(names.length)
+    const colors = Object.fromEntries(
+      names.map((name, at) => {
+        const props = states[at]?.props
+        return [name.text, { color: props?.color, dimColor: props?.dimColor }]
+      }),
+    )
+    expect(colors).toEqual({
+      local_latest: warning,
+      local_ran: warning,
+      local_today: dim,
+      local_older: dim,
+      local_unfiled: dim,
+      local_working: success,
+      local_permission: error,
+      local_input: error,
+      local_background: success,
+      local_compacting: success,
+    })
+    await ui.unmount()
+  }
+})
+
 test('by time, a box with no session is left out', async ($, on) => {
   const now = Date.now()
   const files = new Map([

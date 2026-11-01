@@ -385,12 +385,13 @@ const lasted = (since: number, now: number): string => {
   return stamp(since)
 }
 
-// The states colored in the subtitle; the rest stay dim.
-const URGENT = new Map([
-  [PERMISSION, 'warning'],
-  [INPUT, 'warning'],
-  [WORKING, 'claude'],
-])
+// The state's color in the subtitle: a session waiting on the person, one that has
+// not come to rest, and a recent idle one. Any other idle stays dim.
+const colorOf = (state: string, isRecent: boolean): string | undefined => {
+  if (state === PERMISSION || state === INPUT) return 'error'
+  if (state !== IDLE) return 'success'
+  return isRecent ? 'warning' : undefined
+}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -479,14 +480,20 @@ const usedAt = (row: Row): number => row.filed.prompted ?? activeAt(row)
 
 const RECENT_WINDOW = 2 * 60 * 60 * 1000
 
-// The boxes of the time view, each newest message first. Recent runs from the latest
-// message back two hours, and also holds what ran in that time or has not come to
-// rest, whenever its own last message was. A box with no session is left out.
-const byTime = (rows: Row[], now: number): [string, Row[]][] => {
+// What counts as Recent among these rows: from the latest message back two hours,
+// and also what ran in that time or has not come to rest, whenever its own last
+// message was.
+const recentAmong = (rows: Row[]): ((row: Row) => boolean) => {
   const from = Math.max(...rows.map(usedAt)) - RECENT_WINDOW
+  return row => row.filed.state !== IDLE || activeAt(row) >= from || usedAt(row) >= from
+}
+
+// The boxes of the time view, each newest message first. A box with no session is
+// left out.
+const byTime = (rows: Row[], now: number): [string, Row[]][] => {
+  const isRecent = recentAmong(rows)
   const midnight = new Date(now).setHours(0, 0, 0, 0)
   const sorted = [...rows].sort((a, b) => usedAt(b) - usedAt(a))
-  const isRecent = (row: Row): boolean => row.filed.state !== IDLE || activeAt(row) >= from || usedAt(row) >= from
   const recent = sorted.filter(isRecent)
   const rest = sorted.filter(row => !isRecent(row))
   const boxes: [string, Row[]][] = [
@@ -656,13 +663,14 @@ export const register: Register = on => {
     for (const row of rows) groups.set(projectOf(row), [...(groups.get(projectOf(row)) ?? []), row])
     const headings = ordered([...groups.keys()], await readOrder($))
     // Each session is its name as a title, a button, then its state and how long
-    // it lasted as a subtitle under it, the state in color when it is urgent. The
+    // it lasted as a subtitle under it, the state in its color, in either view. The
     // session the pane is in has a pointer before its name. Listed by time, no card
     // names its project, so a line between the two does. Inside a button the
     // app draws one line of plain text, whatever the Text in it asks for (observed).
+    const isRecent = recentAmong(rows)
     const session = (row: Row) => {
       const { state, note, since } = row.filed
-      const color = URGENT.get(state)
+      const color = colorOf(state, isRecent(row))
       const rest = `${note === '' ? '' : ` ${note}`} · ${lasted(since, now)}`
       const link = linkOf(row.id)
       // The page draws an https link alone, so the session's link goes to

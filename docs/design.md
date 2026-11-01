@@ -152,6 +152,7 @@ and the file write stands ahead of that gate.
 | Order and boxes use the person's last message | `lastActivityAt` moves while a session works, so rows would move under the pointer |
 | Activity or a state other than idle puts a session in Recent | a session running or waiting must not sink below what the person last messaged |
 | A file's `updated` does not stand for activity while the app's list is known | it moves when the app restarts the process (observed) |
+| Permission and input are `error`, other states `success` until idle, an idle `warning` if it counts as Recent and dim if not, in both views | a state's color should not change with the view, so both use the Time view's Recent rule |
 
 What the app draws (observed):
 

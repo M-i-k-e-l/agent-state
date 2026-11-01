@@ -1,6 +1,6 @@
 {
   "name": "agent-state",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Shows the state of Claude (working, permission, input, idle, background, compacting) in the iTerm2 tab subtitle and in a Sessions pane in the desktop app.",
   "author": { "name": "M-i-k-e-l" },
   "license": "MIT"

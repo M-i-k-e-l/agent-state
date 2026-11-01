@@ -61,6 +61,9 @@ by your last message, newest first, with each session's project on a line of its
 
 A session with no message on record yet uses its last activity instead.
 
+The state's color means the same in both views: the theme's `error` for permission and input, its `success` for working,
+background and compacting, its `warning` for an idle session that counts as Recent, and dim for any other idle.
+
 ## What it reads
 
 The mod reads Claude Code's `tool_decision` telemetry records to see the moment you approve a permission dialog; no
