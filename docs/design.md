@@ -153,6 +153,7 @@ and the file write stands ahead of that gate.
 | Activity or a state other than idle puts a session in Recent | a session running or waiting must not sink below what the person last messaged |
 | A file's `updated` does not stand for activity while the app's list is known | it moves when the app restarts the process (observed) |
 | Permission and input are `error`, other states `success` until idle, an idle `warning` if it counts as Recent and dim if not, in both views | a state's color should not change with the view, so both use the Time view's Recent rule |
+| The button under the prompt draws beside `next(e)` | a hook that skips `next` hides every mod after it on that row, so the mods' order would decide what shows |
 
 What the app draws (observed):
 

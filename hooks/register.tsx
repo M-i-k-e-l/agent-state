@@ -632,20 +632,21 @@ export const register: Register = on => {
   // In the app, a button beside the session's modes under the prompt opens and
   // closes the pane, and counts the sessions in each state, what waits on the
   // person first, so they show with the pane closed. The app draws it grey whatever color or background it
-  // asks for, and draws nothing there for a Client region (observed). The
-  // terminal keeps its own line.
+  // asks for, and draws nothing there for a Client region (observed). What is
+  // beneath, the app's modes and other mods', stays before it, so the order of
+  // the mods does not matter. The terminal keeps its own line.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    if (e.surface !== 'desktop') return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const modes = e.props.modes.join(' & ')
+    const drawing = await next(e)
+    if (e.surface !== 'desktop') return drawing
+    const { Box, Button } = $.ui.resolve(e)
     const rows = await sessionRows($)
     const counts = RANK.map(state => {
       const count = rows.filter(row => row.filed.state === state).length
       return count === 0 ? '' : `${state.split(' ')[0]}${count}`
     }).filter(count => count !== '')
     return (
-      <Box>
-        {modes !== '' && <Text>{modes} · </Text>}
+      <Box flexDirection="row" alignItems="center" columnGap="sm">
+        {drawing}
         <Button key="sessions" plain onPress={() => void togglePane($)}>
           {counts.length === 0 ? 'Sessions' : `Sessions · ${counts.join(' ')}`}
         </Button>

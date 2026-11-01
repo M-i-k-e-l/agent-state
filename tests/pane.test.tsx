@@ -17,6 +17,15 @@ const PANE = {
   },
 } as const
 
+// Stands for what draws beneath the mod under the prompt: the engine's modes, or
+// another mod's drawing.
+const drawModes = (on: On): void => {
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{e.props.modes.join(' & ')}</Text>
+  })
+}
+
 // Stands for the engine beneath the mod: a file system held in a map, the
 // environment given, and no tab to write to. Each process run is kept in `ran`.
 const engine = (
@@ -25,6 +34,7 @@ const engine = (
   files: Map<string, string>,
   ran: (readonly string[])[] = [],
 ): void => {
+  drawModes(on)
   on('process.run', (_$, e) => {
     ran.push(e.argv)
     return { value: { ...RAN, exitCode: 2 } }
@@ -189,14 +199,31 @@ test("in the app, a button beside the session's modes opens the pane, and closes
     return { value: undefined }
   })
   on('clock.every', () => ({ value: undefined }))
+  drawModes(on)
 
   const ui = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: ['auto mode on'] } })
-  expect((await ui.find({ type: 'Text', text: /auto/ }))?.text).toBe('auto mode on · ')
+  expect((await ui.find({ type: 'Text', text: /auto/ }))?.text).toBe('auto mode on')
   await ui.press({ key: 'sessions' })
   await ui.press({ key: 'sessions' })
   await ui.press({ key: 'sessions' })
   expect(done).toEqual(['open agent-state', 'close agent-state', 'open agent-state'])
   await ui.unmount()
+})
+
+test('under the prompt, what is beneath the mod stays: beside the button in the app, alone in the terminal', async ($, on) => {
+  engine(on, { HOME: '/Users/me' }, new Map())
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+
+  const props = { modes: ['beneath'] }
+  const app = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props })
+  expect((await app.find({ type: 'Text', text: /beneath/ }))?.text).toBe('beneath')
+  expect((await app.find({ type: 'Button' }))?.text).toBe('Sessions')
+  await app.unmount()
+
+  const terminal = await $.ui.mount({ plugin: 'agent-state', surface: 'terminal', component: 'SessionMode', props })
+  expect((await terminal.find({ type: 'Text', text: /beneath/ }))?.text).toBe('beneath')
+  expect(await terminal.find({ type: 'Button' })).toBeUndefined()
+  await terminal.unmount()
 })
 
 test('the pane lists sessions under their project, the projects from Z to A and This computer last', async ($, on) => {
