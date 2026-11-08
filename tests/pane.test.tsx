@@ -264,6 +264,28 @@ test('the pane lists sessions under their project, the projects from Z to A and 
   await again.unmount()
 })
 
+test("a session the app started in a spare folder is listed under the app's folder for it", async ($, on) => {
+  const spare = '/Users/me/.claude/spares/spare-BMhKIl'
+  const files = new Map([
+    [
+      '/Users/me/.claude/agent-state/local_a.json',
+      JSON.stringify({ state: '⚙️ working', note: '', since: Date.now(), title: 'a', cwd: spare, updated: Date.now() }),
+    ],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  on('mcp.call', (_$, e) => {
+    const listed = { sessionId: 'local_a', title: 'a', cwd: '/Users/me/Dev/hookdrills', lastActivityAt: new Date().toISOString() }
+    const text = JSON.stringify(e.tool === 'list_sessions' ? [listed] : {})
+    return { value: { isError: false, content: [{ type: 'text' as const, text }] } }
+  })
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: 'hookdrills' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /spare-/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 test("a resumed session's idle begins at its last answer, not at the restart, until its next turn", async ($, on) => {
   const files = new Map<string, string>()
   engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' }, files)

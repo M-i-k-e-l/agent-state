@@ -154,6 +154,7 @@ and the file write stands ahead of that gate.
 | A file's `updated` does not stand for activity while the app's list is known | it moves when the app restarts the process (observed) |
 | Permission and input are `error`, other states `success` until idle, an idle `warning` if it counts as Recent and dim if not, in both views | a state's color should not change with the view, so both use the Time view's Recent rule |
 | The button under the prompt draws beside `next(e)` | a hook that skips `next` hides every mod after it on that row, so the mods' order would decide what shows |
+| A session's project is the app's folder for it while the app's list is known | the app starts a session in a spare folder (`~/.claude/spares/spare-…`) and then moves it, so the folder its file kept from the start is the spare (observed) |
 
 What the app draws (observed):
 

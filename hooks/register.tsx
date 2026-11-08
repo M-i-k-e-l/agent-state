@@ -353,7 +353,9 @@ const listFiled = async ($: EngineInterface, from: string): Promise<Row[]> => {
 // session it lists, from its file while its process runs, else idle since its
 // last activity, as the app stops the process of a session left alone; an
 // archived session is left out. Before that, or without the app's tools: every
-// live file.
+// live file. The folder is the app's: a session it starts begins in a spare
+// folder it keeps ready (~/.claude/spares/spare-…) and is then moved to its
+// project (observed), so the folder the file kept from the start is the spare.
 const sessionRows = async ($: EngineInterface): Promise<Row[]> => {
   if (appSessions === undefined) await loadSavedSessions($)
   if (appSessions === undefined) await fetchAppSessions($)
@@ -363,7 +365,8 @@ const sessionRows = async ($: EngineInterface): Promise<Row[]> => {
   const byId = new Map(files.map(row => [row.id, row]))
   return [...appSessions].map(([id, app]) => {
     const row = byId.get(id)
-    if (row !== undefined && row.filed.state !== CLEARED) return row
+    if (row !== undefined && row.filed.state !== CLEARED)
+      return app.cwd === '' ? row : { id, filed: { ...row.filed, cwd: app.cwd } }
     const filed = { state: IDLE, note: '', since: app.lastActivity, cwd: app.cwd, updated: 0, prompted: row?.filed.prompted }
     return { id, filed }
   })
