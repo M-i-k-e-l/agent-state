@@ -286,6 +286,28 @@ test("a session the app started in a spare folder is listed under the app's fold
   await ui.unmount()
 })
 
+test("the app's escaped titles read as written", async ($, on) => {
+  const files = new Map([
+    [
+      '/Users/me/.claude/agent-state/local_a.json',
+      JSON.stringify({ state: '💤 idle', note: '', since: Date.now(), title: 'a', cwd: '/x', updated: Date.now() }),
+    ],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  on('mcp.call', (_$, e) => {
+    const title = 'Drop "from &lt;subagent&gt;" &amp; keep &amp;lt; &#39;as is&#x27;'
+    const listed = { sessionId: 'local_a', title, cwd: '/x', lastActivityAt: new Date().toISOString() }
+    const text = JSON.stringify(e.tool === 'list_sessions' ? [listed] : {})
+    return { value: { isError: false, content: [{ type: 'text' as const, text }] } }
+  })
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const names = (await ui.findAll({ type: 'Button' })).map(button => button.text)
+  expect(names).toContain(`Drop "from <subagent>" & keep &lt; 'as is'`)
+  await ui.unmount()
+})
+
 test("a resumed session's idle begins at its last answer, not at the restart, until its next turn", async ($, on) => {
   const files = new Map<string, string>()
   engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' }, files)

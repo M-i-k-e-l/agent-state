@@ -507,10 +507,20 @@ const byTime = (rows: Row[], now: number): [string, Row[]][] => {
   return boxes.filter(([, inBox]) => inBox.length > 0)
 }
 
+// The app's session tools hand titles back HTML-escaped, `<` as `&lt;` (observed),
+// and the pane draws text as it is. One pass, so `&amp;lt;` stays `&lt;`.
+const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
+const unescaped = (text: string): string =>
+  text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, code: string) => {
+    if (code[0] !== '#') return NAMED[code.toLowerCase()] ?? whole
+    const point = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10)
+    return point <= 0x10ffff ? String.fromCodePoint(point) : whole
+  })
+
 // The app's title for the session; the one Claude Code reported can be another
 // session's, such as the one it was started from (observed).
 const nameOf = (row: Row): string =>
-  appSessions?.get(row.id)?.title ?? row.filed.title ?? (row.filed.cwd.split('/').pop() || row.id)
+  unescaped(appSessions?.get(row.id)?.title ?? row.filed.title ?? (row.filed.cwd.split('/').pop() || row.id))
 
 // Opens the pane and, once a surface places it, the timer that redraws it.
 const openPane = async ($: EngineInterface): Promise<boolean> => {
