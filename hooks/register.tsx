@@ -118,8 +118,18 @@ const jobsNote = (): string => (jobs === 0 ? '' : `⏳${jobs}`)
 const FOLDER = '.claude/agent-state'
 
 // What a session's file holds. `since` is when the state began; `state` is empty
-// once the session ended; `prompted` is when the person last sent it a message.
-type Filed = { state: string; note: string; since: number; title?: string; cwd: string; updated: number; prompted?: number }
+// once the session ended; `prompted` is when the person last sent it a message;
+// `ranAt` is when it last took a state other than idle.
+type Filed = {
+  state: string
+  note: string
+  since: number
+  title?: string
+  cwd: string
+  updated: number
+  prompted?: number
+  ranAt?: number
+}
 
 // This session's file, set at session.start; undefined when it writes none: any
 // session the desktop app does not host, such as one in an iTerm2 tab, whose
@@ -135,6 +145,9 @@ let asked: { state: string; note: string } | undefined
 // When the person last sent this session a message; a restart reads it back from
 // the file before the first write.
 let prompted: number | undefined
+// When this session last took a state other than idle; a restart reads it back too.
+// A restart or a reload writes idle with a new `since`, so `since` cannot say it ran.
+let ranAt: number | undefined
 let fileQueue: Promise<unknown> = Promise.resolve()
 // When a resumed session last answered, as its SessionStart said, until its first
 // turn: the app restarts a session's process often (reopened, returned to), and
@@ -164,7 +177,8 @@ const toFile = ($: EngineInterface, line: string, state: string, note: string, i
     const now = Date.now()
     const kept = filed?.state === state ? filed.since : now
     const since = state === IDLE && lastAnswer !== undefined ? Math.min(kept, lastAnswer) : kept
-    const next: Filed = { state, note, since, title, cwd, updated: now, prompted }
+    if (state !== IDLE && state !== CLEARED) ranAt = now
+    const next: Filed = { state, note, since, title, cwd, updated: now, prompted, ranAt }
     const isWritten = await $.fs.write(file, JSON.stringify(next)).then(
       () => true,
       () => false,
@@ -367,7 +381,15 @@ const sessionRows = async ($: EngineInterface): Promise<Row[]> => {
     const row = byId.get(id)
     if (row !== undefined && row.filed.state !== CLEARED)
       return app.cwd === '' ? row : { id, filed: { ...row.filed, cwd: app.cwd } }
-    const filed = { state: IDLE, note: '', since: app.lastActivity, cwd: app.cwd, updated: 0, prompted: row?.filed.prompted }
+    const filed = {
+      state: IDLE,
+      note: '',
+      since: app.lastActivity,
+      cwd: app.cwd,
+      updated: 0,
+      prompted: row?.filed.prompted,
+      ranAt: row?.filed.ranAt,
+    }
     return { id, filed }
   })
 }
@@ -491,18 +513,60 @@ const recentAmong = (rows: Row[]): ((row: Row) => boolean) => {
   return row => row.filed.state !== IDLE || activeAt(row) >= from || usedAt(row) >= from
 }
 
-// The boxes of the time view, each newest message first. A box with no session is
-// left out.
-const byTime = (rows: Row[], now: number): [string, Row[]][] => {
+// The sessions the person moved out of Recent into Today, by id, with when, kept in
+// the plugin's store for every session's pane. Only the time view reads it.
+const MOVED = 'movedToToday'
+type Moved = Record<string, number>
+
+const readMoved = async ($: EngineInterface): Promise<Moved> => {
+  const saved: unknown = await $.store.get(MOVED).catch(() => undefined)
+  if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) return {}
+  return Object.fromEntries(Object.entries(saved).filter(([, at]) => typeof at === 'number')) as Moved
+}
+
+// The latest a row says anything happened: its last message, the app's last activity,
+// or when it last ran, read from its file on each draw while the app's list is
+// fetched every ten seconds.
+const lastOf = (row: Row): number => Math.max(activeAt(row), usedAt(row), row.filed.ranAt ?? 0)
+
+// Whether a move still holds: the session is idle and neither got a message nor
+// ran since, so new work brings it back to Recent.
+const movedIn =
+  (moved: Moved): ((row: Row) => boolean) =>
+  row => {
+    const at = moved[row.id]
+    return at !== undefined && row.filed.state === IDLE && lastOf(row) <= at
+  }
+
+// Moves a session to Today, and forgets the moves that no longer hold, both read
+// from the sessions as they stand at the press: one that ran since the draw stays.
+// The move is dated no earlier than the row's own times, so a clock ahead of this
+// one does not undo it at once.
+const moveToToday = async ($: EngineInterface, id: string): Promise<void> => {
+  const rows = await sessionRows($)
+  const row = rows.find(one => one.id === id)
+  if (row === undefined || row.filed.state !== IDLE) return
+  const moved = await readMoved($)
+  const holds = movedIn(moved)
+  const kept = Object.fromEntries(rows.filter(holds).map(one => [one.id, moved[one.id] as number]))
+  await $.store.set(MOVED, { ...kept, [id]: Math.max(Date.now(), lastOf(row)) }).catch(() => undefined)
+  $.ui.invalidate('ui.render')
+}
+
+// The boxes of the time view, each newest message first. A session the person moved
+// today is in Today, whenever its last message was. A box with no session is left out.
+const byTime = (rows: Row[], now: number, moved: Moved): [string, Row[]][] => {
   const isRecent = recentAmong(rows)
+  const isMoved = movedIn(moved)
   const midnight = new Date(now).setHours(0, 0, 0, 0)
+  const isToday = (row: Row): boolean => usedAt(row) >= midnight || (isMoved(row) && (moved[row.id] ?? 0) >= midnight)
   const sorted = [...rows].sort((a, b) => usedAt(b) - usedAt(a))
-  const recent = sorted.filter(isRecent)
-  const rest = sorted.filter(row => !isRecent(row))
+  const recent = sorted.filter(row => isRecent(row) && !isMoved(row))
+  const rest = sorted.filter(row => !recent.includes(row))
   const boxes: [string, Row[]][] = [
     ['Recent', recent],
-    ['Today', rest.filter(row => usedAt(row) >= midnight)],
-    ['Older', rest.filter(row => usedAt(row) < midnight)],
+    ['Today', rest.filter(isToday)],
+    ['Older', rest.filter(row => !isToday(row))],
   ]
   return boxes.filter(([, inBox]) => inBox.length > 0)
 }
@@ -575,14 +639,15 @@ const retitle = async ($: EngineInterface, named: string | undefined): Promise<u
   if (asked !== undefined) await toFile($, 'retitle', asked.state, asked.note, true)
 }
 
-// Reads back when the person last messaged this session, as an earlier process
-// filed it. A message sent meanwhile stands.
+// Reads back when the person last messaged this session and when it last ran, as
+// an earlier process filed them. What happened meanwhile stands.
 const loadPrompted = async ($: EngineInterface): Promise<void> => {
   const text = file === undefined ? undefined : await $.fs.read(file).catch(() => undefined)
   if (typeof text !== 'string') return
   try {
-    const saved = (JSON.parse(text) as Filed).prompted
-    if (prompted === undefined && typeof saved === 'number') prompted = saved
+    const saved = JSON.parse(text) as Filed
+    if (prompted === undefined && typeof saved.prompted === 'number') prompted = saved.prompted
+    if (ranAt === undefined && typeof saved.ranAt === 'number') ranAt = saved.ranAt
   } catch {
     // No file yet, or one caught mid-write: the next message sets it.
   }
@@ -671,6 +736,7 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const rows = await sessionRows($)
     const isByTime = await readByTime($)
+    const moved = isByTime ? await readMoved($) : {}
     rows.sort((a, b) => rank(a.filed.state) - rank(b.filed.state) || b.filed.since - a.filed.since)
     const now = Date.now()
     const groups = new Map<string, Row[]>()
@@ -681,8 +747,9 @@ export const register: Register = on => {
     // session the pane is in has a pointer before its name. Listed by time, no card
     // names its project, so a line between the two does. Inside a button the
     // app draws one line of plain text, whatever the Text in it asks for (observed).
+    // An idle session in Recent ends its state line with a button to Today.
     const isRecent = recentAmong(rows)
-    const session = (row: Row) => {
+    const session = (row: Row, canMove: boolean) => {
       const { state, note, since } = row.filed
       const color = colorOf(state, isRecent(row))
       const rest = `${note === '' ? '' : ` ${note}`} · ${lasted(since, now)}`
@@ -700,7 +767,7 @@ export const register: Register = on => {
               {projectOf(row)}
             </Text>
           )}
-          <Box>
+          <Box alignItems="center">
             {color === undefined ? (
               <Text dimColor size="footnote">
                 {state}
@@ -711,8 +778,11 @@ export const register: Register = on => {
               </Text>
             )}
             <Text dimColor size="footnote">
-              {rest}
+              {canMove ? `${rest} · ` : rest}
             </Text>
+            {canMove && (
+              <Button key={`today:${row.id}`} label="→ Today" plain onPress={() => void moveToToday($, row.id)} />
+            )}
           </Box>
         </Box>
       )
@@ -742,12 +812,12 @@ export const register: Register = on => {
             />
           </Box>
         )}
-        {isByTime && byTime(rows, now).map(([heading, inBox]) => (
+        {isByTime && byTime(rows, now, moved).map(([heading, inBox]) => (
           <Box flexDirection="column" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
             <Text dimColor weight="medium">
               {heading}
             </Text>
-            {inBox.map(session)}
+            {inBox.map(row => session(row, heading === 'Recent' && row.filed.state === IDLE))}
           </Box>
         ))}
         {!isByTime && headings.map((heading, index) => (
@@ -763,7 +833,7 @@ export const register: Register = on => {
                 <Button key={`down:${heading}`} label="↓" plain onPress={() => void move($, headings, heading, 1)} />
               )}
             </Box>
-            {(groups.get(heading) ?? []).map(session)}
+            {(groups.get(heading) ?? []).map(row => session(row, false))}
           </Box>
         ))}
       </Box>

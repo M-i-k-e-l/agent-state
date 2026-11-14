@@ -667,6 +667,133 @@ test('by time, a box with no session is left out', async ($, on) => {
   await ui.unmount()
 })
 
+test('by time, an idle session in Recent moves to Today, for every pane, until it gets a message again', async ($, on) => {
+  const now = Date.now()
+  const hours = (count: number): number => now - count * 60 * 60 * 1000
+  const folder = '/Users/me/.claude/agent-state'
+  const filed = (state: string, prompted: number): string =>
+    JSON.stringify({ state, note: '', since: now, cwd: '/Users/me/Dev/alpha', updated: now, prompted })
+  const files = new Map([
+    ['store:isByTime', 'true'],
+    [`${folder}/local_latest.json`, filed('💤 idle', hours(0))],
+    [`${folder}/local_working.json`, filed('⚙️ working', hours(0.5))],
+    // Recent by its activity, its message from yesterday: once moved, it is in Today.
+    [`${folder}/local_ran.json`, filed('💤 idle', hours(30))],
+    // Recent by its message: a run after the move brings it back.
+    [`${folder}/local_window.json`, filed('💤 idle', hours(1))],
+    [`${folder}/local_older.json`, filed('💤 idle', hours(30))],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const app = '/Users/me/Dev/alpha'
+  const listed = [
+    LISTED('local_latest', app, hours(0)),
+    LISTED('local_working', app, hours(0.5)),
+    LISTED('local_ran', app, hours(1)),
+    LISTED('local_window', app, hours(1)),
+    LISTED('local_older', app, hours(30)),
+  ]
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? listed : {}) }],
+    },
+  }))
+  // The headings and the names as drawn, so each name follows its box.
+  const boxes = async (ui: { findAll: (query: { text: RegExp }) => Promise<{ text: string }[]> }): Promise<string[]> =>
+    (await ui.findAll({ text: /^(Recent|Today|Older|local_\w+)$/ })).map(one => one.text)
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(ui)).toEqual(['Recent', 'local_latest', 'local_working', 'local_window', 'local_ran', 'Older', 'local_older'])
+  // Only the idle sessions in Recent have the button.
+  expect((await ui.findAll({ type: 'Button', text: '→ Today' })).map(one => one.key)).toEqual([
+    'today:local_latest',
+    'today:local_window',
+    'today:local_ran',
+  ])
+  await ui.press({ key: 'today:local_ran' })
+  await ui.press({ key: 'today:local_window' })
+  await ui.unmount()
+  // A restart writes idle again with a new `since`: nothing ran, so the move holds.
+  files.set(
+    `${folder}/local_window.json`,
+    JSON.stringify({ state: '💤 idle', note: '', since: Date.now() + 1, cwd: app, updated: Date.now() + 1, prompted: hours(1) }),
+  )
+
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(again)).toEqual([
+    'Recent',
+    'local_latest',
+    'local_working',
+    'Today',
+    'local_window',
+    'local_ran',
+    'Older',
+    'local_older',
+  ])
+  // Its color stays as Recent gives it, the same in both views.
+  expect((await again.findAll({ type: 'Text', text: '💤 idle' })).map(one => one.props.color)).toEqual([
+    'warning',
+    'warning',
+    'warning',
+    undefined,
+  ])
+  await again.unmount()
+
+  // The projects have no such button.
+  files.set('store:isByTime', 'false')
+  const projects = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await projects.find({ type: 'Button', text: '→ Today' })).toBeUndefined()
+  await projects.unmount()
+
+  // A message after the move brings one back, and a run that came to rest the other.
+  files.set('store:isByTime', 'true')
+  const later = Date.now() + 1
+  files.set(`${folder}/local_ran.json`, filed('💤 idle', later))
+  files.set(
+    `${folder}/local_window.json`,
+    JSON.stringify({ state: '💤 idle', note: '', since: later, cwd: app, updated: later, prompted: hours(1), ranAt: later }),
+  )
+  const back = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(back)).toEqual(['Recent', 'local_ran', 'local_latest', 'local_working', 'local_window', 'Older', 'local_older'])
+  await back.press({ key: 'today:local_latest' })
+  // A session that started running since the draw is not moved.
+  files.set(`${folder}/local_ran.json`, JSON.stringify({ ...JSON.parse(files.get(`${folder}/local_ran.json`) ?? '{}'), state: '⚙️ working' }))
+  await back.press({ key: 'today:local_ran' })
+  await back.unmount()
+  // A move that no longer holds is forgotten with the next one.
+  expect(Object.keys(JSON.parse(files.get('store:movedToToday') ?? '{}') as object)).toEqual(['local_latest'])
+})
+
+test("by time, a move holds though the app's clock runs ahead of this one", async ($, on) => {
+  const now = Date.now()
+  const folder = '/Users/me/.claude/agent-state'
+  const app = '/Users/me/Dev/alpha'
+  const files = new Map([
+    ['store:isByTime', 'true'],
+    [`${folder}/local_a.json`, JSON.stringify({ state: '💤 idle', note: '', since: now, cwd: app, updated: now, prompted: now })],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  // The app dates its last activity a minute after this clock's now.
+  const listed = [LISTED('local_a', app, now + 60_000)]
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? listed : {}) }],
+    },
+  }))
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'today:local_a' })
+  await ui.unmount()
+
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const headings = await again.findAll({ type: 'Text', text: /^(Recent|Today|Older)$/ })
+  expect(headings.map(heading => heading.text)).toEqual(['Today'])
+  await again.unmount()
+})
+
 test('the view buttons switch between the projects and the time boxes, for every pane', async ($, on) => {
   const now = Date.now()
   const files = new Map([
@@ -699,22 +826,27 @@ test('the view buttons switch between the projects and the time boxes, for every
   await back.unmount()
 })
 
-test('a message is filed with the session, and a restarted process keeps it', async ($, on) => {
+test('a message and a run are filed with the session, and a restarted process keeps them', async ($, on) => {
   const path = '/Users/me/.claude/agent-state/local_1.json'
-  const files = new Map([[path, JSON.stringify({ state: '💤 idle', note: '', since: 1, cwd: '/x', updated: 1, prompted: 1234 })]])
+  const files = new Map([
+    [path, JSON.stringify({ state: '💤 idle', note: '', since: 1, cwd: '/x', updated: 1, prompted: 1234, ranAt: 5678 })],
+  ])
   engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' }, files)
   on('classic.UserPromptSubmit', () => ({}))
   const promptedIn = (): unknown => (JSON.parse(files.get(path) ?? '{}') as { prompted?: unknown }).prompted
+  const ranIn = (): unknown => (JSON.parse(files.get(path) ?? '{}') as { ranAt?: unknown }).ranAt
 
   // The first write after a restart keeps what the file held.
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   expect(promptedIn()).toBe(1234)
+  expect(ranIn()).toBe(5678)
 
   const before = Date.now()
   await $.classic.UserPromptSubmit({ prompt: 'hi' })
   await $.turn.start({ text: 'hi', turnId: 't1' })
   expect(stateIn(files, path)).toBe('⚙️ working')
   expect(promptedIn()).toBeGreaterThanOrEqual(before)
+  expect(ranIn()).toBeGreaterThanOrEqual(before)
 
   // The end of the session keeps it too.
   const sent = promptedIn()

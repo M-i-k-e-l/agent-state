@@ -61,6 +61,10 @@ by your last message, newest first, with each session's project on a line of its
 
 A session with no message on record yet uses its last activity instead.
 
+An idle session in **Recent** ends its state line with **→ Today**, which moves it to **Today**, for every session's pane.
+It goes back to **Recent** once you message it or it runs again, and to **Older** after midnight. The Projects view
+and the state's color are unchanged.
+
 The state's color means the same in both views: the theme's `error` for permission and input, its `success` for working,
 background and compacting, its `warning` for an idle session that counts as Recent, and dim for any other idle.
 
