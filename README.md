@@ -65,8 +65,8 @@ An idle session in **Recent** has **→ Today** at the right of its state line, 
 It goes back to **Recent** once you message it or it runs again, and to **Older** after midnight. The Projects view
 and the state's color are unchanged.
 
-Each session in **Recent** ends its state line with **Pin**, which keeps it in **Recent**, above the rest, until you press
-**Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
+Each session in **Recent** ends its state line with **Pin**, which keeps it in **Recent**, in its place by time, until you
+press **Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
 unchanged, so a pinned idle session older than Recent's 2 hours draws dim.
 
 The state's color means the same in both views: the theme's `error` for permission and input, its `success` for working,

@@ -794,7 +794,7 @@ test("by time, a move holds though the app's clock runs ahead of this one", asyn
   await again.unmount()
 })
 
-test('by time, a pinned session stays at the top of Recent, for every pane, until unpinned', async ($, on) => {
+test('by time, a pinned session stays in Recent, in its place by time, for every pane, until unpinned', async ($, on) => {
   const now = Date.now()
   const hours = (count: number): number => now - count * 60 * 60 * 1000
   const folder = '/Users/me/.claude/agent-state'
@@ -831,16 +831,16 @@ test('by time, a pinned session stays at the top of Recent, for every pane, unti
   await ui.unmount()
   files.set(`${folder}/local_job.json`, filed('💤 idle', hours(30)))
 
-  // At rest it would sink to Older; pinned, it heads Recent with no button to Today,
-  // its color dim as Recent's own rule gives it.
+  // At rest it would sink to Older; pinned, it stays in Recent, below the newer
+  // message, with no button to Today, its color dim as Recent's own rule gives it.
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await boxes(again)).toEqual(['Recent', 'local_job', 'local_latest'])
+  expect(await boxes(again)).toEqual(['Recent', 'local_latest', 'local_job'])
   expect(await keys(again, 'Unpin')).toEqual(['pin:local_job'])
   expect(await keys(again, 'Pin')).toEqual(['pin:local_latest'])
   expect(await keys(again, '→ Today')).toEqual(['today:local_latest'])
   expect((await again.findAll({ type: 'Text', text: '💤 idle' })).map(one => one.props.color)).toEqual([
-    undefined,
     'warning',
+    undefined,
   ])
   await again.press({ key: 'pin:local_job' })
   await again.unmount()
@@ -857,7 +857,7 @@ test('by time, a pinned session stays at the top of Recent, for every pane, unti
   await projects.unmount()
 })
 
-test('by time, pins head Recent by last message, Unpin forgets a move made under the pin, and an unlisted pin stays', async ($, on) => {
+test('by time, pins sit in Recent by last message with the rest, Unpin forgets a move made under the pin, and an unlisted pin stays', async ($, on) => {
   const now = Date.now()
   const hours = (count: number): number => now - count * 60 * 60 * 1000
   const folder = '/Users/me/.claude/agent-state'
@@ -905,14 +905,14 @@ test('by time, pins head Recent by last message, Unpin forgets a move made under
   expect(stored('pinnedToRecent')).toEqual(['local_a', 'local_b', 'local_c', 'local_gone'])
 
   const pinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await boxes(pinned)).toEqual(['Recent', 'local_a', 'local_b', 'local_c', 'local_d'])
+  expect(await boxes(pinned)).toEqual(['Recent', 'local_a', 'local_d', 'local_b', 'local_c'])
   await pinned.press({ key: 'pin:local_b' })
   await pinned.press({ key: 'pin:local_a' })
   await pinned.unmount()
 
   // Unpinned, each goes back where its own times put it, not to Today.
   const unpinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await boxes(unpinned)).toEqual(['Recent', 'local_c', 'local_a', 'local_d', 'local_b'])
+  expect(await boxes(unpinned)).toEqual(['Recent', 'local_a', 'local_d', 'local_b', 'local_c'])
   await unpinned.unmount()
   expect(stored('movedToToday')).toEqual([])
   expect(stored('pinnedToRecent')).toEqual(['local_c', 'local_gone'])

@@ -577,7 +577,7 @@ const pinToRecent = async ($: EngineInterface, id: string, isPinned: boolean): P
 }
 
 // The boxes of the time view, each newest message first. A pinned session is in
-// Recent, above the rest, whatever its state or age. A session the person moved
+// Recent whatever its state or age, in its place by time among the rest. A session the person moved
 // today is in Today, whenever its last message was. A box with no session is left out.
 const byTime = (rows: Row[], now: number, moved: Moved, pinned: Pinned): [string, Row[]][] => {
   const isRecent = recentAmong(rows)
@@ -586,10 +586,7 @@ const byTime = (rows: Row[], now: number, moved: Moved, pinned: Pinned): [string
   const midnight = new Date(now).setHours(0, 0, 0, 0)
   const isToday = (row: Row): boolean => usedAt(row) >= midnight || (isMoved(row) && (moved[row.id] ?? 0) >= midnight)
   const sorted = [...rows].sort((a, b) => usedAt(b) - usedAt(a))
-  const recent = [
-    ...sorted.filter(isPinned),
-    ...sorted.filter(row => !isPinned(row) && isRecent(row) && !isMoved(row)),
-  ]
+  const recent = sorted.filter(row => isPinned(row) || (isRecent(row) && !isMoved(row)))
   const rest = sorted.filter(row => !recent.includes(row))
   const boxes: [string, Row[]][] = [
     ['Recent', recent],
