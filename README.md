@@ -61,7 +61,7 @@ by your last message, newest first, with each session's project on a line of its
 
 A session with no message on record yet uses its last activity instead.
 
-An idle session in **Recent** ends its state line with **→ Today**, which moves it to **Today**, for every session's pane.
+An idle session in **Recent** has **→ Today** at the right of its state line, which moves it to **Today**, for every session's pane.
 It goes back to **Recent** once you message it or it runs again, and to **Older** after midnight. The Projects view
 and the state's color are unchanged.
 

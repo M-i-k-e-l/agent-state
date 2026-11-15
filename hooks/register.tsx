@@ -776,9 +776,10 @@ export const register: Register = on => {
     // session the pane is in has a pointer before its name. Listed by time, no card
     // names its project, so a line between the two does. Inside a button the
     // app draws one line of plain text, whatever the Text in it asks for (observed).
-    // In Recent the state line spreads out: the state, then a button to Today for an
-    // idle session not pinned, then Pin, or Unpin, at its end. The name keeps its line
-    // whole, so a long one does not push Pin out.
+    // In Recent the state line ends with the row's buttons together at its right: one
+    // to Today for an idle session not pinned, then Pin, or Unpin. Kept together they
+    // read as the row's actions, and Pin lines up down the box. The name keeps its
+    // line whole, so a long one does not push Pin out.
     const isRecent = recentAmong(rows)
     const session = (row: Row, canMove: boolean, pin?: 'Pin' | 'Unpin') => {
       const { state, note, since } = row.filed
@@ -813,16 +814,20 @@ export const register: Register = on => {
                 {rest}
               </Text>
             </Box>
-            {canMove && (
-              <Button key={`today:${row.id}`} label="→ Today" plain onPress={() => void moveToToday($, row.id)} />
-            )}
-            {pin !== undefined && (
-              <Button
-                key={`pin:${row.id}`}
-                label={pin}
-                plain
-                onPress={() => void pinToRecent($, row.id, pin === 'Pin')}
-              />
+            {(canMove || pin !== undefined) && (
+              <Box alignItems="center" columnGap="sm">
+                {canMove && (
+                  <Button key={`today:${row.id}`} label="→ Today" plain onPress={() => void moveToToday($, row.id)} />
+                )}
+                {pin !== undefined && (
+                  <Button
+                    key={`pin:${row.id}`}
+                    label={pin}
+                    plain
+                    onPress={() => void pinToRecent($, row.id, pin === 'Pin')}
+                  />
+                )}
+              </Box>
             )}
           </Box>
         </Box>
