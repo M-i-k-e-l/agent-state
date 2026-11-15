@@ -794,6 +794,130 @@ test("by time, a move holds though the app's clock runs ahead of this one", asyn
   await again.unmount()
 })
 
+test('by time, a pinned session stays at the top of Recent, for every pane, until unpinned', async ($, on) => {
+  const now = Date.now()
+  const hours = (count: number): number => now - count * 60 * 60 * 1000
+  const folder = '/Users/me/.claude/agent-state'
+  const app = '/Users/me/Dev/alpha'
+  const filed = (state: string, prompted: number): string =>
+    JSON.stringify({ state, note: '', since: now, cwd: app, updated: now, prompted })
+  const files = new Map([
+    ['store:isByTime', 'true'],
+    [`${folder}/local_latest.json`, filed('💤 idle', hours(0))],
+    // Recent only while it works: its message is from yesterday.
+    [`${folder}/local_job.json`, filed('⚙️ working', hours(30))],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const listed = [LISTED('local_latest', app, hours(0)), LISTED('local_job', app, hours(30))]
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? listed : {}) }],
+    },
+  }))
+  const boxes = async (ui: { findAll: (query: { text: RegExp }) => Promise<{ text: string }[]> }): Promise<string[]> =>
+    (await ui.findAll({ text: /^(Recent|Today|Older|local_\w+)$/ })).map(one => one.text)
+  const keys = async (
+    ui: { findAll: (query: { type: 'Button'; text: string }) => Promise<{ key?: string | null }[]> },
+    text: string,
+  ): Promise<unknown[]> => (await ui.findAll({ type: 'Button', text })).map(one => one.key)
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(ui)).toEqual(['Recent', 'local_latest', 'local_job'])
+  // Every session in Recent can be pinned, a working one too.
+  expect(await keys(ui, 'Pin')).toEqual(['pin:local_latest', 'pin:local_job'])
+  await ui.press({ key: 'pin:local_job' })
+  await ui.unmount()
+  files.set(`${folder}/local_job.json`, filed('💤 idle', hours(30)))
+
+  // At rest it would sink to Older; pinned, it heads Recent with no button to Today,
+  // its color dim as Recent's own rule gives it.
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(again)).toEqual(['Recent', 'local_job', 'local_latest'])
+  expect(await keys(again, 'Unpin')).toEqual(['pin:local_job'])
+  expect(await keys(again, 'Pin')).toEqual(['pin:local_latest'])
+  expect(await keys(again, '→ Today')).toEqual(['today:local_latest'])
+  expect((await again.findAll({ type: 'Text', text: '💤 idle' })).map(one => one.props.color)).toEqual([
+    undefined,
+    'warning',
+  ])
+  await again.press({ key: 'pin:local_job' })
+  await again.unmount()
+
+  const unpinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(unpinned)).toEqual(['Recent', 'local_latest', 'Older', 'local_job'])
+  expect(await keys(unpinned, 'Pin')).toEqual(['pin:local_latest'])
+  await unpinned.unmount()
+
+  // The projects have no pins.
+  files.set('store:isByTime', 'false')
+  const projects = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await projects.find({ type: 'Button', text: 'Pin' })).toBeUndefined()
+  await projects.unmount()
+})
+
+test('by time, pins head Recent by last message, Unpin forgets a move made under the pin, and an unlisted pin stays', async ($, on) => {
+  const now = Date.now()
+  const hours = (count: number): number => now - count * 60 * 60 * 1000
+  const folder = '/Users/me/.claude/agent-state'
+  const app = '/Users/me/Dev/alpha'
+  const filed = (prompted: number): string =>
+    JSON.stringify({ state: '💤 idle', note: '', since: now, cwd: app, updated: now, prompted })
+  const files = new Map([
+    ['store:isByTime', 'true'],
+    // A session the app no longer lists, archived or past its list's end.
+    ['store:pinnedToRecent', JSON.stringify({ local_gone: hours(40) })],
+    [`${folder}/local_a.json`, filed(hours(0))],
+    [`${folder}/local_d.json`, filed(hours(0.5))],
+    [`${folder}/local_b.json`, filed(hours(1))],
+    [`${folder}/local_c.json`, filed(hours(30))],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const listed = [
+    LISTED('local_a', app, hours(0)),
+    LISTED('local_d', app, hours(0.5)),
+    LISTED('local_b', app, hours(1)),
+    LISTED('local_c', app, hours(30)),
+  ]
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? listed : {}) }],
+    },
+  }))
+  const boxes = async (ui: { findAll: (query: { text: RegExp }) => Promise<{ text: string }[]> }): Promise<string[]> =>
+    (await ui.findAll({ text: /^(Recent|Today|Older|local_\w+)$/ })).map(one => one.text)
+  const stored = (key: string): string[] => Object.keys(JSON.parse(files.get(`store:${key}`) ?? '{}') as object).sort()
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(ui)).toEqual(['Recent', 'local_a', 'local_d', 'local_b', 'Older', 'local_c'])
+  // Since this pane drew, another pins a and c; this one still offers a's move, and it lands.
+  files.set('store:pinnedToRecent', JSON.stringify({ local_gone: hours(40), local_a: now, local_c: now }))
+  await ui.press({ key: 'today:local_a' })
+  // Since that draw, another moves b to Today; this one still offers b's pin, and it
+  // lands. Each holds a pin and a move, and the pin wins.
+  files.set('store:movedToToday', JSON.stringify({ ...JSON.parse(files.get('store:movedToToday') ?? '{}'), local_b: now + 1 }))
+  await ui.press({ key: 'pin:local_b' })
+  await ui.unmount()
+  expect(stored('movedToToday')).toEqual(['local_a', 'local_b'])
+  expect(stored('pinnedToRecent')).toEqual(['local_a', 'local_b', 'local_c', 'local_gone'])
+
+  const pinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(pinned)).toEqual(['Recent', 'local_a', 'local_b', 'local_c', 'local_d'])
+  await pinned.press({ key: 'pin:local_b' })
+  await pinned.press({ key: 'pin:local_a' })
+  await pinned.unmount()
+
+  // Unpinned, each goes back where its own times put it, not to Today.
+  const unpinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(unpinned)).toEqual(['Recent', 'local_c', 'local_a', 'local_d', 'local_b'])
+  await unpinned.unmount()
+  expect(stored('movedToToday')).toEqual([])
+  expect(stored('pinnedToRecent')).toEqual(['local_c', 'local_gone'])
+})
+
 test('the view buttons switch between the projects and the time boxes, for every pane', async ($, on) => {
   const now = Date.now()
   const files = new Map([

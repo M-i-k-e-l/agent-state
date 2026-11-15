@@ -518,11 +518,19 @@ const recentAmong = (rows: Row[]): ((row: Row) => boolean) => {
 const MOVED = 'movedToToday'
 type Moved = Record<string, number>
 
-const readMoved = async ($: EngineInterface): Promise<Moved> => {
-  const saved: unknown = await $.store.get(MOVED).catch(() => undefined)
+// The sessions the person pinned to Recent, by id, with when, kept the same way.
+const PINNED = 'pinnedToRecent'
+type Pinned = Record<string, number>
+
+// A map of session ids to times from the plugin's store, empty when unset or not one.
+const readStamps = async ($: EngineInterface, key: string): Promise<Record<string, number>> => {
+  const saved: unknown = await $.store.get(key).catch(() => undefined)
   if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) return {}
-  return Object.fromEntries(Object.entries(saved).filter(([, at]) => typeof at === 'number')) as Moved
+  return Object.fromEntries(Object.entries(saved).filter(([, at]) => typeof at === 'number')) as Record<string, number>
 }
+
+const readMoved = ($: EngineInterface): Promise<Moved> => readStamps($, MOVED)
+const readPinned = ($: EngineInterface): Promise<Pinned> => readStamps($, PINNED)
 
 // The latest a row says anything happened: its last message, the app's last activity,
 // or when it last ran, read from its file on each draw while the app's list is
@@ -553,15 +561,35 @@ const moveToToday = async ($: EngineInterface, id: string): Promise<void> => {
   $.ui.invalidate('ui.render')
 }
 
-// The boxes of the time view, each newest message first. A session the person moved
+// Pins a session to Recent, or unpins it. A pin outranks a move to Today, which a
+// pane drawn before the pin can still store, in any order of the two writes; so
+// Unpin forgets the move and leaves the session where its own times put it. Pins of
+// sessions the app does not list stay: its list can be stale, fail or stop at 200,
+// an archived session can come back, and a pin no row has draws nothing.
+const pinToRecent = async ($: EngineInterface, id: string, isPinned: boolean): Promise<void> => {
+  const { [id]: _was, ...others } = await readPinned($)
+  await $.store.set(PINNED, isPinned ? { ...others, [id]: Date.now() } : others).catch(() => undefined)
+  if (!isPinned) {
+    const { [id]: undone, ...moves } = await readMoved($)
+    if (undone !== undefined) await $.store.set(MOVED, moves).catch(() => undefined)
+  }
+  $.ui.invalidate('ui.render')
+}
+
+// The boxes of the time view, each newest message first. A pinned session is in
+// Recent, above the rest, whatever its state or age. A session the person moved
 // today is in Today, whenever its last message was. A box with no session is left out.
-const byTime = (rows: Row[], now: number, moved: Moved): [string, Row[]][] => {
+const byTime = (rows: Row[], now: number, moved: Moved, pinned: Pinned): [string, Row[]][] => {
   const isRecent = recentAmong(rows)
   const isMoved = movedIn(moved)
+  const isPinned = (row: Row): boolean => pinned[row.id] !== undefined
   const midnight = new Date(now).setHours(0, 0, 0, 0)
   const isToday = (row: Row): boolean => usedAt(row) >= midnight || (isMoved(row) && (moved[row.id] ?? 0) >= midnight)
   const sorted = [...rows].sort((a, b) => usedAt(b) - usedAt(a))
-  const recent = sorted.filter(row => isRecent(row) && !isMoved(row))
+  const recent = [
+    ...sorted.filter(isPinned),
+    ...sorted.filter(row => !isPinned(row) && isRecent(row) && !isMoved(row)),
+  ]
   const rest = sorted.filter(row => !recent.includes(row))
   const boxes: [string, Row[]][] = [
     ['Recent', recent],
@@ -737,6 +765,7 @@ export const register: Register = on => {
     const rows = await sessionRows($)
     const isByTime = await readByTime($)
     const moved = isByTime ? await readMoved($) : {}
+    const pinned = isByTime ? await readPinned($) : {}
     rows.sort((a, b) => rank(a.filed.state) - rank(b.filed.state) || b.filed.since - a.filed.since)
     const now = Date.now()
     const groups = new Map<string, Row[]>()
@@ -747,9 +776,11 @@ export const register: Register = on => {
     // session the pane is in has a pointer before its name. Listed by time, no card
     // names its project, so a line between the two does. Inside a button the
     // app draws one line of plain text, whatever the Text in it asks for (observed).
-    // An idle session in Recent ends its state line with a button to Today.
+    // In Recent the state line spreads out: the state, then a button to Today for an
+    // idle session not pinned, then Pin, or Unpin, at its end. The name keeps its line
+    // whole, so a long one does not push Pin out.
     const isRecent = recentAmong(rows)
-    const session = (row: Row, canMove: boolean) => {
+    const session = (row: Row, canMove: boolean, pin?: 'Pin' | 'Unpin') => {
       const { state, note, since } = row.filed
       const color = colorOf(state, isRecent(row))
       const rest = `${note === '' ? '' : ` ${note}`} · ${lasted(since, now)}`
@@ -767,21 +798,31 @@ export const register: Register = on => {
               {projectOf(row)}
             </Text>
           )}
-          <Box alignItems="center">
-            {color === undefined ? (
+          <Box alignItems="center" justifyContent="space-between" columnGap="sm">
+            <Box alignItems="center">
+              {color === undefined ? (
+                <Text dimColor size="footnote">
+                  {state}
+                </Text>
+              ) : (
+                <Text color={color} weight="medium" size="footnote">
+                  {state}
+                </Text>
+              )}
               <Text dimColor size="footnote">
-                {state}
+                {rest}
               </Text>
-            ) : (
-              <Text color={color} weight="medium" size="footnote">
-                {state}
-              </Text>
-            )}
-            <Text dimColor size="footnote">
-              {canMove ? `${rest} · ` : rest}
-            </Text>
+            </Box>
             {canMove && (
               <Button key={`today:${row.id}`} label="→ Today" plain onPress={() => void moveToToday($, row.id)} />
+            )}
+            {pin !== undefined && (
+              <Button
+                key={`pin:${row.id}`}
+                label={pin}
+                plain
+                onPress={() => void pinToRecent($, row.id, pin === 'Pin')}
+              />
             )}
           </Box>
         </Box>
@@ -812,12 +853,16 @@ export const register: Register = on => {
             />
           </Box>
         )}
-        {isByTime && byTime(rows, now, moved).map(([heading, inBox]) => (
+        {isByTime && byTime(rows, now, moved, pinned).map(([heading, inBox]) => (
           <Box flexDirection="column" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
             <Text dimColor weight="medium">
               {heading}
             </Text>
-            {inBox.map(row => session(row, heading === 'Recent' && row.filed.state === IDLE))}
+            {inBox.map(row => {
+              if (heading !== 'Recent') return session(row, false)
+              const isPinned = pinned[row.id] !== undefined
+              return session(row, !isPinned && row.filed.state === IDLE, isPinned ? 'Unpin' : 'Pin')
+            })}
           </Box>
         ))}
         {!isByTime && headings.map((heading, index) => (
