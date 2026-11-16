@@ -95,7 +95,8 @@ For 🙋 needs you, the pane reads the desktop app's own record of each idle ses
 
 In the desktop app it also reads the list of sessions through the app's own session tools, and keeps what the sessions
 share on your machine: each session's state in `~/.claude/agent-state/`, the pane's order, open or closed choice and last list in
-`~/.claude/agent-state.*.json`, and the pane's view in the plugin's own store.
+`~/.claude/agent-state.*.json`, and the pane's view in the plugin's own store. Once the app's list no longer has a
+session, archived or deleted, the mod deletes its state file once the session's process has ended, or after a week.
 
 ## How it works
 
@@ -132,6 +133,10 @@ In the desktop app:
 - Sessions in a terminal, shown in the app as Remote Control sessions, are not listed or counted.
 - The Sessions button is the app's gray chip: the app ignores any color a mod asks for there.
 - After the mod reloads, a session's idle time starts over from the reload.
+- A session taken out of the archive shows 💤 idle since its last activity, and **Time** orders it by that time, not
+  your last message, until you next message it: its state file was deleted when it was archived.
+- With 200 or more sessions not archived besides the one you are in, no state file is deleted, and past 200 the oldest
+  are not listed or counted: the app's session tools give at most that many.
 - A session that crashes keeps its last state until it next starts, as long as the app lists it.
 - 🙋 needs you reads the app's internal session records, not an API: an app update can change them, and the state then
   shows 💤 idle instead.

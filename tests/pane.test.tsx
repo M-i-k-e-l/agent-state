@@ -430,6 +430,116 @@ test("a session's file is read again only once its time or size changes, or its 
   expect(await draw()).toEqual({ names: ['a3'], reads: [] })
 })
 
+// The app's tools answering with these sessions as the list, and this session as {}.
+// An id after `untitled:` is listed with no title, and one after `noid:` under
+// another key than the session id.
+const appLists = (on: On, ids: string[]): void => {
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            e.tool === 'list_sessions'
+              ? ids.map(id => {
+                  const sessionId = id.replace(/^(untitled|noid):/, '')
+                  const title = id.startsWith('untitled:') ? null : sessionId
+                  const row = { title, cwd: '/x', lastActivityAt: new Date().toISOString() }
+                  return id.startsWith('noid:') ? { ...row, id: sessionId } : { ...row, sessionId }
+                })
+              : {},
+          ),
+        },
+      ],
+    },
+  }))
+}
+
+const removed = (ran: (readonly string[])[]): (readonly string[])[] => ran.filter(argv => argv[0] === 'rm')
+
+test("a fetch of the whole list deletes the files of sessions the app no longer lists", async ($, on) => {
+  const folder = '/Users/me/.claude/agent-state'
+  const filed = (state: string): string => JSON.stringify({ state, note: '', since: 0, cwd: '/x', updated: 0 })
+  const minutesAgo = (minutes: number): string => String(Date.now() - minutes * 60_000)
+  const files = new Map([
+    // Listed: kept, with a title or without.
+    [`${folder}/local_a.json`, filed('')],
+    [`mtime:${folder}/local_a.json`, '1'],
+    [`${folder}/local_untitled.json`, filed('')],
+    [`mtime:${folder}/local_untitled.json`, '1'],
+    // Archived or deleted, its process ended: deleted.
+    [`${folder}/local_ended.json`, filed('')],
+    [`mtime:${folder}/local_ended.json`, minutesAgo(2)],
+    // Not listed, its process still running: kept, as a list may leave it out by
+    // mistake, unless its file is a week old.
+    [`${folder}/local_running.json`, filed('⚙️ working')],
+    [`mtime:${folder}/local_running.json`, minutesAgo(2)],
+    // One caught mid-write, its state unknown: kept.
+    [`${folder}/local_torn.json`, '{"state":'],
+    [`mtime:${folder}/local_torn.json`, minutesAgo(2)],
+    [`${folder}/local_old.json`, filed('💤 idle')],
+    [`mtime:${folder}/local_old.json`, minutesAgo(8 * 24 * 60)],
+    // Written in the minute before the fetch, as by a session the list does not
+    // have yet: kept.
+    [`${folder}/local_new.json`, filed('')],
+    [`mtime:${folder}/local_new.json`, minutesAgo(0.5)],
+    // Not a session's file: kept.
+    [`${folder}/notes.txt`, ''],
+    [`mtime:${folder}/notes.txt`, '1'],
+  ])
+  const ran: (readonly string[])[] = []
+  engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_me' }, files, ran)
+  appLists(on, ['local_a', 'untitled:local_untitled'])
+
+  // This session's own file, which the list leaves out: kept.
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  files.set(`mtime:${folder}/local_me.json`, '1')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.unmount()
+  expect(removed(ran)).toEqual([['rm', '-f', '--', `${folder}/local_ended.json`, `${folder}/local_old.json`]])
+})
+
+for (const [why, count] of [
+  ['the limit may have cut short', 200],
+  ['that came back empty', 0],
+  ['with a row that has no id', 2],
+] as const) {
+  test(`nothing is deleted from a list ${why}`, async ($, on) => {
+    const folder = '/Users/me/.claude/agent-state'
+    const files = new Map([
+      [`${folder}/local_gone.json`, JSON.stringify({ state: '', note: '', since: 0, cwd: '/x', updated: 0 })],
+      [`mtime:${folder}/local_gone.json`, '1'],
+    ])
+    const ran: (readonly string[])[] = []
+    engine(on, { HOME: '/Users/me' }, files, ran)
+    appLists(on, Array.from({ length: count }, (_, i) => (count === 2 && i === 1 ? 'noid:local_gone' : `local_${i}`)))
+
+    await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    await ui.unmount()
+    expect(removed(ran)).toEqual([])
+  })
+}
+
+test('nothing is deleted without a fetched list: from the saved one, or after a fetch that failed', async ($, on) => {
+  const folder = '/Users/me/.claude/agent-state'
+  const files = new Map([
+    [`${folder}/local_gone.json`, JSON.stringify({ state: '', note: '', since: 0, cwd: '/x', updated: 0 })],
+    [`mtime:${folder}/local_gone.json`, '1'],
+    [`${folder}.sessions.json`, JSON.stringify([['local_a', { title: 'a', cwd: '/x', lastActivity: 0 }]])],
+  ])
+  const ran: (readonly string[])[] = []
+  engine(on, { HOME: '/Users/me' }, files, ran)
+  on('mcp.call', () => ({ value: { isError: true, content: [] } }))
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text).slice(2)).toEqual(['a'])
+  await ui.unmount()
+  expect(removed(ran)).toEqual([])
+})
+
 test('the button under the prompt counts the sessions in each state, what waits on the person first', async ($, on) => {
   const filed = (state: string): string =>
     JSON.stringify({ state, note: '', since: Date.now(), cwd: '/x', updated: Date.now() })

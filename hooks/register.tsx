@@ -317,6 +317,9 @@ let appSessionsAt = 0
 // take the state for a tool of the model's, over a question or a permission.
 let isFetching = false
 const APP_TOOLS = 'mcp__ccd_session_mgmt__'
+// The most sessions a fetch asks for, most recently active first; the tool has no
+// paging, so a list this long may leave some out.
+const LIST_LIMIT = 200
 
 const parsed = (result: McpToolResult): unknown => {
   const block = result.content[0]
@@ -326,17 +329,23 @@ const parsed = (result: McpToolResult): unknown => {
 const fetchAppSessions = async ($: EngineInterface): Promise<void> => {
   if (Date.now() - appSessionsAt < 10_000) return
   appSessionsAt = Date.now()
+  const startedAt = appSessionsAt
   isFetching = true
   // The list leaves out archived sessions and this one, which get_session adds.
-  const others = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: 200 }).then(parsed, () => undefined)
+  const others = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: LIST_LIMIT }).then(parsed, () => undefined)
   const self = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' }).then(parsed, () => undefined)
   isFetching = false
   if (!Array.isArray(others)) return
   const fetched = new Map<string, Listed>()
+  // Every session listed and not archived, shown or not: a row the pane cannot
+  // draw still keeps its file.
+  const kept = new Set<string>()
   for (const one of [...others, self]) {
     if (typeof one !== 'object' || one === null) continue
     const { sessionId, title: named, link, cwd: at, lastActivityAt, isArchived } = one as Record<string, unknown>
-    if (typeof sessionId !== 'string' || typeof named !== 'string' || isArchived === true) continue
+    if (typeof sessionId !== 'string' || isArchived === true) continue
+    kept.add(sessionId)
+    if (typeof named !== 'string') continue
     fetched.set(sessionId, {
       title: named,
       link: typeof link === 'string' ? link : undefined,
@@ -347,6 +356,71 @@ const fetchAppSessions = async ($: EngineInterface): Promise<void> => {
   appSessions = fetched
   const path = savedSessionsFile()
   if (path !== undefined) await $.fs.write(path, JSON.stringify([...fetched])).catch(() => undefined)
+  // Whole: under the limit, not empty, and every row read, so a list the app
+  // gives in another shape deletes nothing.
+  const isWhole = others.length > 0 && others.length < LIST_LIMIT && others.every(one => idOf(one) !== undefined)
+  if (isWhole) void prune($, kept, startedAt)
+}
+
+// A listed row's session id, when it has one.
+const idOf = (one: unknown): string | undefined => {
+  const id = typeof one === 'object' && one !== null ? (one as Record<string, unknown>).sessionId : undefined
+  return typeof id === 'string' ? id : undefined
+}
+
+// The state a session's file says, or undefined when it says none.
+const stateOf = (text: string): string | undefined => {
+  try {
+    const state = (JSON.parse(text) as { state?: unknown } | null)?.state
+    return typeof state === 'string' ? state : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Whether a prune is running, so two never overlap.
+let isPruning = false
+
+// Deletes the file of each session the app no longer lists, archived or deleted,
+// so the folder each redraw lists stops growing. Only after a fetch that got the
+// whole list: never from the saved list, nor from one the limit may have cut, nor
+// from an empty one or one with a row it cannot read. Kept:
+// - a file written from a minute before the fetch began on, as a session just
+//   started writes its file before the list has it;
+// - this session's own;
+// - one whose process still runs, as its file says, unless it is a week old: an
+//   archived or deleted session's process ends, so a list that leaves out a running
+//   session by mistake leaves its file. One whose process ended relies on the list
+//   being whole. A file whose state cannot be read is kept too. The state is the
+//   redraw's last read while the file is unchanged.
+// A session taken out of the archive has no file once it was pruned, and shows
+// idle since the app's last activity, as one that never ran the mod. `$.fs`
+// deletes nothing, so `rm` does, once for all of them.
+const prune = async ($: EngineInterface, listed: Set<string>, fetchedAt: number): Promise<void> => {
+  if (isPruning || folder === undefined) return
+  isPruning = true
+  try {
+    const from = folder
+    const entries = await $.fs.list(from).catch(() => [])
+    const gone: string[] = []
+    for (const entry of entries) {
+      const path = `${from}/${entry.name}`
+      if (entry.kind !== 'file' || !entry.name.endsWith('.json') || path === file) continue
+      if (entry.mtimeMs >= fetchedAt - 60_000 || listed.has(entry.name.slice(0, -'.json'.length))) continue
+      if (entry.mtimeMs >= fetchedAt - 7 * 24 * 3_600_000) {
+        // The redraw's last read, while the file has not changed since.
+        const cached = filedCache.get(path)
+        const isCurrent = cached?.mtimeMs === entry.mtimeMs && cached.size === entry.size
+        const text = isCurrent ? undefined : await $.fs.read(path).catch(() => undefined)
+        const state = isCurrent ? cached?.filed?.state : typeof text === 'string' ? stateOf(text) : undefined
+        if (state !== CLEARED) continue
+      }
+      gone.push(path)
+    }
+    if (gone.length > 0) await $.process.run(['rm', '-f', '--', ...gone], { timeoutMs: 5000 }).catch(() => undefined)
+  } finally {
+    isPruning = false
+  }
 }
 
 // The list as a session last fetched it, in a file every session reads. A session
