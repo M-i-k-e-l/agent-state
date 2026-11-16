@@ -13,6 +13,7 @@ tested on. The hooks API it uses is early access and may change between releases
 | ⚙️ working             | Main agent is running                                                    |
 | 🔐 permission          | A permission dialog is waiting for you, the main agent's or a subagent's |
 | ❓ input               | A question dialog is waiting for you                                     |
+| 🙋 needs you           | The turn ended asking you something (desktop app only)                   |
 | 💤 idle `Oct 10 12:40` | Nothing is running, since that time                                      |
 | 💤 idle `… ⏳1`        | Waiting for you, with a background command still running                 |
 | 🧵 background          | Main agent is idle, a subagent is running                                |
@@ -46,7 +47,7 @@ tested on. The hooks API it uses is early access and may change between releases
 ## The desktop app
 
 The **Sessions** button counts the app's sessions in each state, what waits on you first, such as
-`Sessions · 🔐1 ❓1 ⚙️2 💤6`. Clicking it opens or closes the pane, for every session of the app.
+`Sessions · 🔐1 ❓1 🙋1 ⚙️2 💤5`. Clicking it opens or closes the pane, for every session of the app.
 
 The pane lists the sessions under their projects, each with its name, its state and how long it has been in that state.
 The session you are in has a `›` before its name. Clicking a name opens that session. The ↑ and ↓ next to a project move
@@ -69,14 +70,23 @@ Each session in **Recent** ends its state line with **Pin**, which keeps it in *
 press **Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
 unchanged, so a pinned idle session older than Recent's 2 hours draws dim.
 
-The state's color means the same in both views: the theme's `error` for permission and input, its `success` for working,
-background and compacting, its `warning` for an idle session that counts as Recent, and dim for any other idle.
+An idle session whose last turn ended asking you something shows 🙋 needs you, the session you are in too. It follows the
+app's own check of whether a session waits on you: the next-step box asked you a question, or, with no such box, the
+app's summary of the turn says it is blocked or needs your input. It stays until you send the session a message. Like
+permission and input, it sits in **Recent** and has no **→ Today**.
+
+The state's color means the same in both views: the theme's `error` for permission, input and needs you, its `success`
+for working, background and compacting, its `warning` for an idle session that counts as Recent, and dim for any other
+idle.
 
 ## What it reads
 
 The mod reads Claude Code's `tool_decision` telemetry records to see the moment you approve a permission dialog; no
 other event says so. It reads them and changes none, and it sends nothing anywhere. This is why `claude plugin validate`
 prints "hooks telemetry for: collector". It works with `DISABLE_TELEMETRY=1` set.
+
+For 🙋 needs you, the pane reads the desktop app's own record of each idle session, in
+`~/Library/Application Support/Claude/claude-code-sessions/`, and changes none.
 
 In the desktop app it also reads the list of sessions through the app's own session tools, and keeps what the sessions
 share on your machine: each session's state in `~/.claude/agent-state/`, the pane's order, open or closed choice and last list in
@@ -117,6 +127,9 @@ In the desktop app:
 - The Sessions button is the app's gray chip: the app ignores any color a mod asks for there.
 - After the mod reloads, a session's idle time starts over from the reload.
 - A session that crashes keeps its last state until it next starts, as long as the app lists it.
+- 🙋 needs you reads the app's internal session records, not an API: an app update can change them, and the state then
+  shows 💤 idle instead.
+- A turn that ended in an error shows 💤 idle, not as the app's red dot.
 - Not tried: closing the pane with its own close mark, which should close it for every session.
 
 ## Development

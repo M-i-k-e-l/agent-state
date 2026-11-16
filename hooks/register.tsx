@@ -15,6 +15,9 @@ const IDLE = '💤 idle'
 const BACKGROUND = '🧵 background'
 const COMPACTING = '📦 compacting'
 const CLEARED = ''
+// An idle session whose last turn ended asking the person something, as the desktop
+// app's own record of it says. Only the pane and the button show it.
+const NEEDS_YOU = '🙋 needs you'
 
 // $1 variable, $2 the state, $3 "1" to stamp the state with the date and time,
 // $4 the tty a write before this one found, or empty, $5 log line, $6 "1" when no
@@ -262,7 +265,7 @@ let own: string | undefined
 const PANE = 'agent-state'
 
 // The pane lists what waits on the person first.
-const RANK = [PERMISSION, INPUT, COMPACTING, WORKING, BACKGROUND, IDLE]
+const RANK = [PERMISSION, INPUT, NEEDS_YOU, COMPACTING, WORKING, BACKGROUND, IDLE]
 
 // Whether the timer that redraws the pane and the button and follows the shared
 // open or closed choice runs; it starts once the app attaches, or the pane is placed.
@@ -363,6 +366,109 @@ const listFiled = async ($: EngineInterface, from: string): Promise<Row[]> => {
   return rows
 }
 
+// The desktop app keeps a record of each session it hosts, `<id>.json` under one
+// folder per account and one per organization beneath this one (observed). It is
+// the app's own file, not an API: it is read, never changed, and anything in it
+// the mod does not expect counts as no question.
+const RECORDS = 'Library/Application Support/Claude/claude-code-sessions'
+
+// Whether a record says the session's last turn ended asking the person something,
+// as the app's own check of whether a session waits on them (read from the app's
+// code; its sidebar dot is drawn where a mod cannot read it): with the turn's
+// wrap-up, its question, unless the turn's summary says it failed; without one, a
+// summary of the turn's last message saying it is blocked or needs input. The app
+// clears the wrap-up when the person sends a message and when a turn starts. Not
+// running is the caller's to know, as the record does not say it. Undefined when
+// the text is not JSON, as one caught mid-write.
+const asksPerson = (text: string): boolean | undefined => {
+  let record: unknown
+  try {
+    record = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (typeof record !== 'object' || record === null) return false
+  const { turnWrapUp: wrapUp, postTurnSummary: summary, postTurnSummaryFor: summaryFor, lastAssistantUuid: last } =
+    record as Record<string, unknown>
+  const category = typeof summary === 'object' && summary !== null ? (summary as Record<string, unknown>).status_category : undefined
+  if (typeof wrapUp === 'object' && wrapUp !== null)
+    return typeof (wrapUp as Record<string, unknown>).needsUser === 'string' && category !== 'failed'
+  return typeof summaryFor === 'string' && summaryFor === last && (category === 'blocked' || category === 'need_input')
+}
+
+// The home folder, set at session.start.
+let home: string | undefined
+// What the records said, by session id, with the time each was written: a record
+// is read again only once it changes. A read that failed or was not JSON keeps the
+// earlier answer and no time, so the next scan reads it again.
+let records = new Map<string, { mtimeMs: number; isAsking: boolean }>()
+let scanning: Promise<void> | undefined
+
+// Reads the records of these sessions that changed since the last scan, one scan
+// at a time for the button and the pane alike. A redraw lists the folders, as it
+// lists the mod's own, and reads only what changed.
+const scanRecords = ($: EngineInterface, ids: Set<string>): Promise<void> => {
+  if (scanning !== undefined) return scanning
+  if (home === undefined || ids.size === 0) return Promise.resolve()
+  const root = `${home}/${RECORDS}`
+  const scan = async (): Promise<void> => {
+    const seen = new Map<string, { mtimeMs: number; isAsking: boolean }>()
+    // Whether a folder that is there failed to list, as a passing error does.
+    let isPartial = false
+    const listOf = (path: string) =>
+      $.fs.list(path).catch(async () => {
+        if (await $.fs.exists(path).catch(() => false)) isPartial = true
+        return []
+      })
+    for (const account of await listOf(root)) {
+      if (account.kind !== 'dir') continue
+      for (const org of await listOf(`${root}/${account.name}`)) {
+        if (org.kind !== 'dir') continue
+        const dir = `${root}/${account.name}/${org.name}`
+        for (const entry of await listOf(dir)) {
+          const id = entry.name.slice(0, -'.json'.length)
+          if (entry.kind !== 'file' || !entry.name.endsWith('.json') || !ids.has(id)) continue
+          const was = records.get(id)
+          if (was !== undefined && was.mtimeMs === entry.mtimeMs) {
+            seen.set(id, was)
+            continue
+          }
+          // A read that failed, or caught the file mid-write, keeps what the last
+          // one said, and is read again on the next scan.
+          const text = await $.fs.read(`${dir}/${entry.name}`).catch(() => undefined)
+          const isAsking = typeof text === 'string' ? asksPerson(text) : undefined
+          seen.set(id, { mtimeMs: isAsking === undefined ? -1 : entry.mtimeMs, isAsking: isAsking ?? was?.isAsking === true })
+        }
+      }
+    }
+    // A session the listing did not find has no question: a folder the app moved
+    // or took away shows idle, not what it last said. After a listing that failed
+    // with its folder there, the sessions it may have held keep what they said.
+    for (const id of ids) {
+      const was = records.get(id)
+      if (isPartial && was !== undefined && !seen.has(id)) seen.set(id, was)
+    }
+    records = seen
+  }
+  scanning = scan().catch(() => undefined).finally(() => {
+    scanning = undefined
+  })
+  return scanning
+}
+
+// Shows an idle session whose record says its last turn asked the person something
+// as needing them. Idle is the mod's own word that the session is not running; one
+// with background commands still running is not waiting, as the app counts it.
+const withQuestions = async ($: EngineInterface, rows: Row[]): Promise<Row[]> => {
+  const isRested = (row: Row): boolean => row.filed.state === IDLE && row.filed.note === ''
+  await scanRecords($, new Set(rows.filter(isRested).map(row => row.id)))
+  return rows.map(row =>
+    isRested(row) && records.get(row.id)?.isAsking === true
+      ? { id: row.id, filed: { ...row.filed, state: NEEDS_YOU } }
+      : row,
+  )
+}
+
 // The sessions to show. Once the app's list is known, saved or fetched: each
 // session it lists, from its file while its process runs, else idle since its
 // last activity, as the app stops the process of a session left alone; an
@@ -370,7 +476,10 @@ const listFiled = async ($: EngineInterface, from: string): Promise<Row[]> => {
 // live file. The folder is the app's: a session it starts begins in a spare
 // folder it keeps ready (~/.claude/spares/spare-…) and is then moved to its
 // project (observed), so the folder the file kept from the start is the spare.
-const sessionRows = async ($: EngineInterface): Promise<Row[]> => {
+const sessionRows = async ($: EngineInterface): Promise<Row[]> => withQuestions($, await sessionStates($))
+
+// The sessions to show, each in the state its file or the app's list gives it.
+const sessionStates = async ($: EngineInterface): Promise<Row[]> => {
   if (appSessions === undefined) await loadSavedSessions($)
   if (appSessions === undefined) await fetchAppSessions($)
   else void fetchAppSessions($)
@@ -413,7 +522,7 @@ const lasted = (since: number, now: number): string => {
 // The state's color in the subtitle: a session waiting on the person, one that has
 // not come to rest, and a recent idle one. Any other idle stays dim.
 const colorOf = (state: string, isRecent: boolean): string | undefined => {
-  if (state === PERMISSION || state === INPUT) return 'error'
+  if (state === PERMISSION || state === INPUT || state === NEEDS_YOU) return 'error'
   if (state !== IDLE) return 'success'
   return isRecent ? 'warning' : undefined
 }
@@ -682,7 +791,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     isHeadless = !e.isInteractive
-    const home = await $.env.get('HOME').catch(() => undefined)
+    home = await $.env.get('HOME').catch(() => undefined)
     const host = await $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined)
     cwd = await $.session.cwd().catch(() => '')
     folder = home === undefined ? undefined : `${home}/${FOLDER}`

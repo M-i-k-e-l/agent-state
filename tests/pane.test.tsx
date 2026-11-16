@@ -50,6 +50,7 @@ const engine = (
     return { value: undefined }
   })
   on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', (_$, e) => ({ value: [...files.keys()].some(path => path === e.path || path.startsWith(`${e.path}/`)) }))
   // The store sits in the map too. Most of these tests draw the projects; one that
   // wants the other view says so.
   on('store.get', (_$, e) => ({ value: JSON.parse(files.get(`store:${e.key}`) ?? 'false') as unknown }))
@@ -57,11 +58,28 @@ const engine = (
     files.set(`store:${e.key}`, JSON.stringify(e.value))
     return { value: undefined }
   })
-  on('fs.list', (_$, e) => ({
-    value: [...files.keys()]
-      .filter(path => path.startsWith(`${e.path}/`))
-      .map(path => ({ name: path.slice(e.path.length + 1), kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })),
-  }))
+  // A path deeper down lists as a folder. A file's time is the map's `mtime:<path>`, or 0.
+  // A folder the map names as `fail:<path>` fails to list, and so does one that is
+  // missing, as on disk.
+  on('fs.list', (_$, e) => {
+    if (files.has(`fail:${e.path}`)) throw new Error('EIO')
+    if (![...files.keys()].some(path => path.startsWith(`${e.path}/`))) throw new Error('ENOENT')
+    const children = new Map<string, 'file' | 'dir'>()
+    for (const path of files.keys()) {
+      if (!path.startsWith(`${e.path}/`)) continue
+      const [name = '', ...deeper] = path.slice(e.path.length + 1).split('/')
+      children.set(name, deeper.length > 0 ? 'dir' : 'file')
+    }
+    return {
+      value: [...children].map(([name, kind]) => ({
+        name,
+        kind,
+        size: 1,
+        mtimeMs: Number(files.get(`mtime:${e.path}/${name}`) ?? 0),
+        isLink: false,
+      })),
+    }
+  })
 }
 
 const stateIn = (files: Map<string, string>, path: string): unknown =>
@@ -376,6 +394,124 @@ test('the button under the prompt counts the sessions in each state, what waits 
   const ui = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
   expect((await ui.find({ type: 'Button' }))?.text).toBe('Sessions · 🔐2 ❓1 📦1 ⚙️1 🧵1 💤2')
   await ui.unmount()
+})
+
+test("an idle session whose last turn asked the person something needs them, as the app's record says", async ($, on) => {
+  const now = Date.now()
+  const folder = '/Users/me/.claude/agent-state'
+  const records = '/Users/me/Library/Application Support/Claude/claude-code-sessions/account/org'
+  const filed = (state: string, title: string, minutesAgo: number): string =>
+    JSON.stringify({ state, note: '', since: now - minutesAgo * 60_000, title, cwd: '/x', updated: now, prompted: now })
+  const record = (fields: object): string => JSON.stringify({ lastAssistantUuid: 'u2', ...fields })
+  const asked = { description: 'Done.', needsUser: 'Ship it?' }
+  const files = new Map([
+    [`${folder}/local_asked.json`, filed('💤 idle', 'asked', 1)],
+    [`${records}/local_asked.json`, record({ turnWrapUp: asked })],
+    [`mtime:${records}/local_asked.json`, '1'],
+    // The wrap-up asked nothing: a summary that says blocked does not count over it.
+    [`${folder}/local_told.json`, filed('💤 idle', 'told', 2)],
+    [
+      `${records}/local_told.json`,
+      record({ turnWrapUp: { description: 'Done.' }, postTurnSummary: { status_category: 'blocked' }, postTurnSummaryFor: 'u2' }),
+    ],
+    // A turn that failed is not a question.
+    [`${folder}/local_failed.json`, filed('💤 idle', 'failed', 3)],
+    [`${records}/local_failed.json`, record({ turnWrapUp: asked, postTurnSummary: { status_category: 'failed' } })],
+    // With no wrap-up, a summary counts when it is of the last message.
+    [`${folder}/local_summary.json`, filed('💤 idle', 'summary', 4)],
+    [`${records}/local_summary.json`, record({ postTurnSummary: { status_category: 'need_input' }, postTurnSummaryFor: 'u2' })],
+    [`${folder}/local_stale.json`, filed('💤 idle', 'stale', 5)],
+    [`${records}/local_stale.json`, record({ postTurnSummary: { status_category: 'blocked' }, postTurnSummaryFor: 'u1' })],
+    // Running: whatever its record says, it is working.
+    [`${folder}/local_working.json`, filed('⚙️ working', 'working', 6)],
+    [`${records}/local_working.json`, record({ turnWrapUp: asked })],
+    // Caught mid-write, and none at all.
+    [`${folder}/local_torn.json`, filed('💤 idle', 'torn', 7)],
+    [`${records}/local_torn.json`, '{"turnWrapUp":'],
+    [`${folder}/local_none.json`, filed('💤 idle', 'none', 8)],
+    // Idle with a background command still running: the app counts it as running.
+    [`${folder}/local_busy.json`, JSON.stringify({ ...JSON.parse(filed('💤 idle', 'busy', 9)), note: '⏳1' })],
+    [`${records}/local_busy.json`, record({ turnWrapUp: asked })],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const state = /^(💤 idle|⚙️ working|🙋 needs you)$/
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual([
+    'Time',
+    'Projects',
+    'asked',
+    'summary',
+    'working',
+    'told',
+    'failed',
+    'stale',
+    'torn',
+    'none',
+    'busy',
+  ])
+  const states = await ui.findAll({ type: 'Text', text: state })
+  expect(states.map(one => one.text)).toEqual([
+    '🙋 needs you',
+    '🙋 needs you',
+    '⚙️ working',
+    '💤 idle',
+    '💤 idle',
+    '💤 idle',
+    '💤 idle',
+    '💤 idle',
+    '💤 idle',
+  ])
+  expect(states[0]?.props.color).toBe('error')
+  await ui.unmount()
+
+  const button = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
+  expect((await button.find({ type: 'Button' }))?.text).toBe('Sessions · 🙋2 ⚙️1 💤6')
+  await button.unmount()
+
+  // By time, it is in Recent, with Pin and no → Today, as a dialog's session is.
+  files.set('store:isByTime', 'true')
+  const byTime = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const keys = (await byTime.findAll({ type: 'Button', text: /^(→ Today|Pin)$/ })).map(one => one.key)
+  expect(keys).toContain('pin:local_asked')
+  expect(keys).not.toContain('today:local_asked')
+  await byTime.unmount()
+
+  // Answered: the app clears the wrap-up, and the record is read again as its time
+  // changed. A record whose time did not change is not read again, unless the last
+  // read caught it mid-write.
+  files.set(`${records}/local_asked.json`, record({}))
+  files.set(`mtime:${records}/local_asked.json`, '2')
+  files.set(`${records}/local_summary.json`, record({}))
+  files.set(`${records}/local_torn.json`, record({ turnWrapUp: asked }))
+  files.set('store:isByTime', 'false')
+  const answered = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await answered.findAll({ type: 'Button' })).map(one => one.text).slice(2, 5)).toEqual(['summary', 'torn', 'working'])
+  expect((await answered.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(2)
+  await answered.unmount()
+
+  // A read caught mid-write keeps the question the last read found. A record gone
+  // from the folder has none.
+  files.set(`${records}/local_torn.json`, '{"turnWrapUp":')
+  files.set(`mtime:${records}/local_torn.json`, '3')
+  files.delete(`${records}/local_summary.json`)
+  const torn = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await torn.findAll({ type: 'Button' })).map(one => one.text)[2]).toBe('torn')
+  expect((await torn.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(1)
+  await torn.unmount()
+
+  // A folder that is there but fails to list once keeps what its sessions said.
+  files.set(`fail:${records}`, '')
+  const failed = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await failed.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(1)
+  await failed.unmount()
+  // Gone for good: no question is left.
+  files.delete(`fail:${records}`)
+  for (const path of [...files.keys()]) if (path.startsWith(`${records}/`)) files.delete(path)
+  const gone = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await gone.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(0)
+  await gone.unmount()
 })
 
 test("the mod's own fetch of the app's list leaves a permission up", async ($, on) => {

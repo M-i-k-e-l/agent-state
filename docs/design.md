@@ -43,6 +43,7 @@ repeats.
 | 🔐 permission               | `classic.PermissionRequest`, main agent or subagent, tool not `AskUserQuestion` |
 | ❓ input                    | the main agent's `tool.call` on `AskUserQuestion`, before `next`                |
 | 📦 compacting               | the main agent's `session.compact`, trigger not `precompute`, before `next`     |
+| 🙋 needs you, app only      | idle, and the app's record of the session asks the person (see below)          |
 | blank                       | `session.end`, any other reason                                                 |
 
 Rules:
@@ -60,6 +61,14 @@ Rules:
   does not make it background. `classic.Stop` comes just before the main agent's `turn.complete` (observed); a turn's
   start clears the count, as an interrupted turn may raise no `Stop`.
 - The tty is found by walking up the process tree from the `$.process.run` child; writes are serialized.
+- 🙋 needs you is drawn, never filed or written to the tab. Each redraw takes an idle session's record from
+  `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/<id>.json`, read again only when its
+  time changes. The rule is the app's own check of whether a session waits on the person (read from its code; the sidebar dot is drawn
+  where a mod cannot read it): a `turnWrapUp` with a `needsUser`,
+  unless `postTurnSummary.status_category` is `failed`; with no `turnWrapUp`, a `postTurnSummary` whose
+  `postTurnSummaryFor` is the `lastAssistantUuid` and whose category is `blocked` or `need_input`. The app clears
+  `turnWrapUp` when the person sends a message and when a turn starts. The record does not say whether the session
+  runs, so the mod's own idle stands for that, without `⏳N`: the app counts background work as running.
 
 ## Test table
 
