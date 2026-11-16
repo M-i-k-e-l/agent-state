@@ -321,20 +321,33 @@ const APP_TOOLS = 'mcp__ccd_session_mgmt__'
 // paging, so a list this long may leave some out.
 const LIST_LIMIT = 200
 
+// What a tool's answer says, or undefined when it failed or is not JSON: a fetch
+// that throws would leave the pane undrawn and the fetch marked running.
 const parsed = (result: McpToolResult): unknown => {
-  const block = result.content[0]
-  return !result.isError && typeof block?.text === 'string' ? (JSON.parse(block.text) as unknown) : undefined
+  try {
+    const block = result.content[0]
+    return !result.isError && typeof block?.text === 'string' ? (JSON.parse(block.text) as unknown) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 const fetchAppSessions = async ($: EngineInterface): Promise<void> => {
-  if (Date.now() - appSessionsAt < 10_000) return
+  // One at a time: a second, begun while a slow one runs, would be ended by the
+  // first's reset of isFetching while its own calls still run.
+  if (isFetching || Date.now() - appSessionsAt < 10_000) return
   appSessionsAt = Date.now()
   const startedAt = appSessionsAt
   isFetching = true
-  // The list leaves out archived sessions and this one, which get_session adds.
-  const others = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: LIST_LIMIT }).then(parsed, () => undefined)
-  const self = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' }).then(parsed, () => undefined)
-  isFetching = false
+  let others: unknown
+  let self: unknown
+  try {
+    // The list leaves out archived sessions and this one, which get_session adds.
+    others = await $.mcp.call('ccd_session_mgmt', 'list_sessions', { limit: LIST_LIMIT }).then(parsed, () => undefined)
+    self = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' }).then(parsed, () => undefined)
+  } finally {
+    isFetching = false
+  }
   if (!Array.isArray(others)) return
   const fetched = new Map<string, Listed>()
   // Every session listed and not archived, shown or not: a row the pane cannot

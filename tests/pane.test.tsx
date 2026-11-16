@@ -711,6 +711,30 @@ test("the mod's own fetch of the app's list leaves a permission up", async ($, o
   expect(stateIn(files, path)).toBe('🔐 permission')
 })
 
+test("a list the app gives as text that is not JSON draws the files, and the model's own call to the app's tools still counts", async ($, on) => {
+  const files = new Map([
+    ['/Users/me/.claude/agent-state/local_a.json', JSON.stringify({ state: '💤 idle', note: '', since: Date.now(), title: 'a', cwd: '/x', updated: 0 })],
+  ])
+  engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' }, files)
+  on('classic.PermissionRequest', () => ({}))
+  on('tool.call', () => ({ result: {} }))
+  on('mcp.call', () => ({ value: { isError: false, content: [{ type: 'text' as const, text: 'not JSON' }] } }))
+  const path = '/Users/me/.claude/agent-state/local_1.json'
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toContain('a')
+  await ui.unmount()
+
+  // The fetch is over: the model's call to the same tools, once approved, is its
+  // own, and its end shows working again.
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.classic.PermissionRequest({ tool_name: 'mcp__ccd_session_mgmt__list_sessions', tool_input: {} })
+  expect(stateIn(files, path)).toBe('🔐 permission')
+  await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', tool_use_id: 'u1' } as never)
+  expect(stateIn(files, path)).toBe('⚙️ working')
+})
+
 test('the app attaching to a session leaves the pane closed', async ($, on) => {
   const opened: string[] = []
   let ticks = 0
