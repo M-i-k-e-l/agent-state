@@ -1,5 +1,5 @@
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const RAN = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
@@ -438,11 +438,14 @@ test("an idle session whose last turn asked the person something needs them, as 
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Each session that needs the person has Dismiss after its name.
   expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual([
     'Time',
     'Projects',
     'asked',
+    'Dismiss',
     'summary',
+    'Dismiss',
     'working',
     'told',
     'failed',
@@ -487,7 +490,11 @@ test("an idle session whose last turn asked the person something needs them, as 
   files.set(`${records}/local_torn.json`, record({ turnWrapUp: asked }))
   files.set('store:isByTime', 'false')
   const answered = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await answered.findAll({ type: 'Button' })).map(one => one.text).slice(2, 5)).toEqual(['summary', 'torn', 'working'])
+  expect((await answered.findAll({ type: 'Button', text: /^(?!Dismiss$)/ })).map(one => one.text).slice(2, 5)).toEqual([
+    'summary',
+    'torn',
+    'working',
+  ])
   expect((await answered.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(2)
   await answered.unmount()
 
@@ -1113,4 +1120,309 @@ test('a message and a run are filed with the session, and a restarted process ke
   await $.session.end({ reason: 'other', sessionId: 'own-id', resume: { id: 'own-id' } })
   expect(stateIn(files, path)).toBe('')
   expect(promptedIn()).toBe(sent)
+})
+
+test('the 🔔 Alert menu sits at the far right of the view buttons, offers Off and each sound by a short name, and plays a pick', async ($, on) => {
+  const files = new Map([
+    [
+      '/Users/me/.claude/agent-state/local_a.json',
+      JSON.stringify({ state: '💤 idle', note: '', since: Date.now(), cwd: '/x', updated: Date.now() }),
+    ],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const played: unknown[] = []
+  on('audio.play', (_$, e) => {
+    played.push(e.clip)
+    return { value: undefined }
+  })
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const menu = await ui.find({ type: 'Select', key: 'sound' })
+  expect(menu?.props.label).toBe('🔔 Alert')
+  expect(menu?.props.value).toBe('off')
+  expect((menu?.props.options as { label: string }[]).map(option => option.label)).toEqual([
+    'Off',
+    'ping',
+    'short-ping',
+    'bell-ting-1',
+    'bell-ting-2',
+    'up',
+    'plunk',
+    'glass-ping',
+    'notification',
+    'dingaling',
+  ])
+  // One line: the view buttons' track first, the menu last, pushed apart.
+  const header = ((await ui.drawn()) as unknown as { children: unknown[] }).children[0] as { props: Record<string, unknown>; children: { type: string }[] }
+  expect(header.props.justifyContent).toBe('space-between')
+  expect(header.children.map(child => child.type)).toEqual(['Box', 'Select'])
+
+  await ui.select({ key: 'sound', value: '719220__metrolynn__plunk.m4a' })
+  expect(played).toEqual([{ asset: 'sounds/719220__metrolynn__plunk.m4a' }])
+  expect(files.get('store:sound')).toBe(JSON.stringify('719220__metrolynn__plunk.m4a'))
+  expect((await ui.find({ type: 'Select', key: 'sound' }))?.props.value).toBe('719220__metrolynn__plunk.m4a')
+
+  await ui.select({ key: 'sound', value: 'off' })
+  expect(played).toHaveLength(1)
+  expect((await ui.find({ type: 'Select', key: 'sound' }))?.props.value).toBe('off')
+  await ui.unmount()
+})
+
+const RECORD = '/Users/me/Library/Application Support/Claude/claude-code-sessions/account/org/local_1.json'
+const ASKED = JSON.stringify({ turnWrapUp: { description: 'Done.', needsUser: 'Ship it?' } })
+
+// The engine beneath, with the sound stored, and each clip played kept in `played`.
+const soundEngine = (on: On, files: Map<string, string>, env: Record<string, string>): unknown[] => {
+  engine(on, env, files)
+  const played: unknown[] = []
+  on('audio.play', (_$, e) => {
+    played.push(e.clip)
+    return { value: undefined }
+  })
+  on('classic.PermissionRequest', () => ({}))
+  on('tool.call', () => ({ result: {} }))
+  return played
+}
+
+test('in an app session the picked sound plays as it newly takes permission, input or needs you, and not on a plain answer', async ($, on) => {
+  const files = new Map([['store:sound', JSON.stringify('545373__stwime__up3.mp3')]])
+  const played = soundEngine(on, files, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' })
+  const UP = { asset: 'sounds/545373__stwime__up3.mp3' }
+  const answer = (turnId: string) =>
+    $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId, reason: 'answer' })
+
+  // As the app starts its sessions: no surface, not interactive.
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  expect(played).toEqual([])
+
+  // An answer that asks nothing plays nothing.
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await answer('t1')
+  expect(played).toEqual([])
+
+  // With the record saying the turn asked, an interrupt and a subagent's answer still play nothing.
+  files.set(RECORD, ASKED)
+  await $.turn.start({ text: 'hi', turnId: 't2' })
+  await $.turn.complete({ answer: 'x', durationMs: 5, isAborted: false, turnId: 's1', reason: 'answer', agentId: 'a1' })
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: 't2', reason: 'aborted' })
+  expect(played).toEqual([])
+  files.delete(RECORD)
+
+  // A permission dialog plays once; a second while the first is up plays nothing.
+  await $.turn.start({ text: 'hi', turnId: 't3' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(played).toEqual([UP])
+
+  // A question plays.
+  await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [] } as never)
+  expect(played).toEqual([UP, UP])
+
+  // An answer that the app's record says asked the person something plays.
+  files.set(RECORD, ASKED)
+  await answer('t3')
+  expect(played).toEqual([UP, UP, UP])
+})
+
+test('a session with no person at the prompt plays the sound too', async ($, on) => {
+  const files = new Map([['store:sound', JSON.stringify('545373__stwime__up3.mp3')]])
+  const played = soundEngine(on, files, { HOME: '/Users/me' })
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(played).toEqual([{ asset: 'sounds/545373__stwime__up3.mp3' }])
+})
+
+test('with the sound off, nothing plays', async ($, on) => {
+  const files = new Map([
+    ['store:sound', JSON.stringify('off')],
+    [RECORD, ASKED],
+  ])
+  const played = soundEngine(on, files, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' })
+
+  // As the app starts its sessions: no surface, not interactive.
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [] } as never)
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(played).toEqual([])
+})
+
+test('a dialog back in view after a question plays nothing again; a new one after work does', async ($, on) => {
+  const files = new Map([['store:sound', JSON.stringify('545373__stwime__up3.mp3')]])
+  const played = soundEngine(on, files, { HOME: '/Users/me' })
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {}, agent_id: 'a1' })
+  expect(played).toHaveLength(1)
+  // The question plays; its end shows the subagent's dialog, still up, again.
+  await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q1', questions: [] } as never)
+  expect(played).toHaveLength(2)
+  // The subagent's turn ends its dialog: working again, so the next dialog is news.
+  await $.turn.complete({ answer: 'x', durationMs: 5, isAborted: false, turnId: 's1', reason: 'answer', agentId: 'a1' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(played).toHaveLength(3)
+})
+
+test("an answer's late question plays while the session waits, and not once a new turn has started", async ($, on) => {
+  const files = new Map([['store:sound', JSON.stringify('545373__stwime__up3.mp3')]])
+  const played = soundEngine(on, files, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' })
+  const clock = mock.clock(on)
+  const answer = (turnId: string) =>
+    $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId, reason: 'answer' })
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+
+  // The record says the turn asked only after the turn ended: the watch plays it.
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await answer('t1')
+  expect(played).toEqual([])
+  files.set(RECORD, ASKED)
+  await clock.advance(1000)
+  expect(played).toHaveLength(1)
+
+  // A new turn, interrupted, while the last answer's watch sleeps: the watch ends.
+  files.delete(RECORD)
+  await $.turn.start({ text: 'hi', turnId: 't2' })
+  await answer('t2')
+  await $.turn.start({ text: 'hi', turnId: 't3' })
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: 't3', reason: 'aborted' })
+  files.set(RECORD, ASKED)
+  await clock.advance(10_000)
+  expect(played).toHaveLength(1)
+})
+
+test("Dismiss on a session that needs the person shows it idle in both views, until it gets a message or runs", async ($, on) => {
+  const now = Date.now()
+  const folder = '/Users/me/.claude/agent-state'
+  const records = '/Users/me/Library/Application Support/Claude/claude-code-sessions/account/org'
+  const filed = (title: string, ranAt: number): string =>
+    JSON.stringify({ state: '💤 idle', note: '', since: now - 60_000, title, cwd: '/x', updated: now - 60_000, prompted: now - 60_000, ranAt })
+  const files = new Map([
+    [`${folder}/local_a.json`, filed('a', now - 60_000)],
+    [`${records}/local_a.json`, JSON.stringify({ turnWrapUp: { description: 'Done.', needsUser: 'Ship it?' } })],
+    [`${folder}/local_b.json`, filed('b', now - 60_000)],
+    [`${records}/local_b.json`, JSON.stringify({ turnWrapUp: { description: 'Done.', needsUser: 'Merge?' } })],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const needsYou = async (ui: { findAll: (query: object) => Promise<{ text: string }[]> }) =>
+    (await ui.findAll({ type: 'Text', text: '🙋 needs you' })).length
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+
+  // By project: Dismiss is the row's one button.
+  const projects = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await projects.findAll({ type: 'Button', text: 'Dismiss' })).map(one => one.key)).toEqual(['dismiss:local_a', 'dismiss:local_b'])
+  await projects.press({ key: 'dismiss:local_a' })
+  expect(await needsYou(projects)).toBe(1)
+  expect((await projects.findAll({ type: 'Button', text: 'Dismiss' })).map(one => one.key)).toEqual(['dismiss:local_b'])
+  await projects.unmount()
+
+  // By time, for every pane: Dismiss sits before Pin, never beside → Today; the
+  // dismissed session is idle with → Today.
+  files.set('store:isByTime', 'true')
+  const byTime = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const keys = (await byTime.findAll({ type: 'Button', text: /^(→ Today|Dismiss|Pin)$/ })).map(one => one.key)
+  expect(keys.indexOf('pin:local_b') - keys.indexOf('dismiss:local_b')).toBe(1)
+  expect(keys.indexOf('pin:local_a') - keys.indexOf('today:local_a')).toBe(1)
+  expect(keys).not.toContain('today:local_b')
+  expect(keys).not.toContain('dismiss:local_a')
+  await byTime.press({ key: 'dismiss:local_b' })
+  expect(await needsYou(byTime)).toBe(0)
+  await byTime.unmount()
+
+  // The button under the prompt counts them as idle.
+  const button = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
+  expect((await button.find({ type: 'Button' }))?.text).toBe('Sessions · 💤2')
+  await button.unmount()
+
+  // Session a runs again and asks again: it needs the person once more.
+  files.set(`${folder}/local_a.json`, filed('a', Date.now() + 60_000))
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await again.findAll({ type: 'Button', text: 'Dismiss' })).map(one => one.key)).toEqual(['dismiss:local_a'])
+  await again.unmount()
+
+  // Session b gets a message: it needs the person once more too.
+  files.set(
+    `${folder}/local_b.json`,
+    JSON.stringify({ ...JSON.parse(filed('b', now - 60_000)), prompted: Date.now() + 60_000 }),
+  )
+  const messaged = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await messaged.findAll({ type: 'Button', text: 'Dismiss' })).map(one => one.key).sort()).toEqual([
+    'dismiss:local_a',
+    'dismiss:local_b',
+  ])
+  await messaged.unmount()
+})
+
+// Sessions that each need the person, by the app's records, filed a minute ago.
+const askingSessions = (ids: string[], now: number): Map<string, string> => {
+  const folder = '/Users/me/.claude/agent-state'
+  const records = '/Users/me/Library/Application Support/Claude/claude-code-sessions/account/org'
+  const files = new Map<string, string>()
+  for (const id of ids) {
+    const at = now - 60_000
+    files.set(`${folder}/${id}.json`, JSON.stringify({ state: '💤 idle', note: '', since: at, cwd: '/x', updated: at, prompted: at, ranAt: at }))
+    files.set(`${records}/${id}.json`, JSON.stringify({ turnWrapUp: { description: 'Done.', needsUser: 'Ship it?' } }))
+  }
+  return files
+}
+
+test('a Dismiss press forgets the dismissals that no longer hold', async ($, on) => {
+  const now = Date.now()
+  const files = askingSessions(['local_a', 'local_c'], now)
+  engine(on, { HOME: '/Users/me' }, files)
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'dismiss:local_a' })
+  // Session a runs again: its dismissal no longer holds, and the next press drops it.
+  const a = JSON.parse(files.get('/Users/me/.claude/agent-state/local_a.json') ?? '{}') as object
+  files.set('/Users/me/.claude/agent-state/local_a.json', JSON.stringify({ ...a, ranAt: Date.now() + 60_000 }))
+  await ui.press({ key: 'dismiss:local_c' })
+  expect(Object.keys(JSON.parse(files.get('store:dismissedNeedsYou') ?? '{}') as object)).toEqual(['local_c'])
+  await ui.unmount()
+})
+
+test("a dismissal holds though the app's clock runs ahead of this one", async ($, on) => {
+  const now = Date.now()
+  const files = askingSessions(['local_a'], now)
+  engine(on, { HOME: '/Users/me' }, files)
+  // The app dates its last activity a minute after this clock's now.
+  const listed = [LISTED('local_a', '/x', now + 60_000)]
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? listed : {}) }],
+    },
+  }))
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'dismiss:local_a' })
+  await ui.unmount()
+
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await again.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(0)
+  await again.unmount()
+})
+
+test('a Dismiss press from a pane drawn before the session got a message dismisses nothing', async ($, on) => {
+  const now = Date.now()
+  const files = askingSessions(['local_a'], now)
+  engine(on, { HOME: '/Users/me' }, files)
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // The person messages the session after the draw: the app clears its question.
+  const record = '/Users/me/Library/Application Support/Claude/claude-code-sessions/account/org/local_a.json'
+  files.set(record, JSON.stringify({}))
+  files.set(`mtime:${record}`, '2')
+  await ui.press({ key: 'dismiss:local_a' })
+  expect(files.get('store:dismissedNeedsYou')).toBeUndefined()
+  await ui.unmount()
 })

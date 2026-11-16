@@ -199,7 +199,13 @@ const emit = ($: EngineInterface, line: string, state: string | undefined): Prom
   if (state === undefined) return Promise.resolve()
   const note = state === IDLE ? jobsNote() : ''
   const filing = toFile($, line, state, note)
-  if (isOff) return filing
+  // A state that waits on the person plays the sound once, until the session stops
+  // waiting on them: a dialog back in view after a question is not news.
+  const isAsking = state === PERMISSION || state === INPUT
+  if (!isAsking) heard.clear()
+  const notifying = isAsking && !heard.has(state) ? notify($) : undefined
+  if (isAsking) heard.add(state)
+  if (isOff) return Promise.all([filing, notifying])
   const at = Date.now() - loaded
   const shows = `${state}${note}`
   queue = queue.then(async () => {
@@ -216,8 +222,12 @@ const emit = ($: EngineInterface, line: string, state: string | undefined): Prom
     shown = ran?.exitCode === 0 ? shows : undefined
     if (ran?.exitCode === 2) isOff = true
   })
-  return Promise.all([filing, queue])
+  return Promise.all([filing, queue, notifying])
 }
+
+// The states that wait on the person whose sound played since the session last
+// stopped waiting on them.
+const heard = new Set<string>()
 
 // The tool calls in flight, each with the agent that made it: a decision names
 // its call, not its agent.
@@ -459,11 +469,13 @@ const scanRecords = ($: EngineInterface, ids: Set<string>): Promise<void> => {
 // Shows an idle session whose record says its last turn asked the person something
 // as needing them. Idle is the mod's own word that the session is not running; one
 // with background commands still running is not waiting, as the app counts it.
+// A session the person dismissed stays idle until its next message, activity or run.
 const withQuestions = async ($: EngineInterface, rows: Row[]): Promise<Row[]> => {
   const isRested = (row: Row): boolean => row.filed.state === IDLE && row.filed.note === ''
   await scanRecords($, new Set(rows.filter(isRested).map(row => row.id)))
+  const isDismissed = dismissedIn(await readDismissed($))
   return rows.map(row =>
-    isRested(row) && records.get(row.id)?.isAsking === true
+    isRested(row) && records.get(row.id)?.isAsking === true && !isDismissed(row)
       ? { id: row.id, filed: { ...row.filed, state: NEEDS_YOU } }
       : row,
   )
@@ -604,6 +616,109 @@ const chooseByTime = async ($: EngineInterface, isByTime: boolean): Promise<void
   $.ui.invalidate('ui.render')
 }
 
+// The sounds the pane's 🔔 Alert menu offers, the mod's own files in sounds/, named as
+// Freesound named them, each shown by a short name of its own. All are CC0
+// (https://creativecommons.org/publicdomain/zero/1.0/), so no credit is owed. Credit:
+//   ping           by n_audioman  https://freesound.org/people/n_audioman/sounds/266742/
+//   short-ping     by LilMati     https://freesound.org/people/LilMati/sounds/495650/
+//   bell-ting-1    by sqeeeek     https://freesound.org/people/sqeeeek/sounds/237106/
+//   bell-ting-2    by sqeeeek     https://freesound.org/people/sqeeeek/sounds/237105/
+//   up             by stwime      https://freesound.org/people/stwime/sounds/545373/
+//   plunk          by Metrolynn   https://freesound.org/people/Metrolynn/sounds/719220/
+//   glass-ping     by Qvantor     https://freesound.org/people/Qvantor/sounds/878247/
+//   notification   by yfjesse     https://freesound.org/people/yfjesse/sounds/235911/
+//   dingaling      by morrisjm    https://freesound.org/people/morrisjm/sounds/268756/
+const SOUND_FILES: readonly { file: string; label: string }[] = [
+  { file: '266742__n_audioman__ping12.m4a', label: 'ping' },
+  { file: '495650__lilmati__supershort-ping-or-short-notification.m4a', label: 'short-ping' },
+  { file: '237106__sqeeeek__sqeeeek_bell_ting1.m4a', label: 'bell-ting-1' },
+  { file: '237105__sqeeeek__sqeeeek_bell_ting2.m4a', label: 'bell-ting-2' },
+  { file: '545373__stwime__up3.mp3', label: 'up' },
+  { file: '719220__metrolynn__plunk.m4a', label: 'plunk' },
+  { file: '878247__qvantor__ui-hover-glass-ping.m4a', label: 'glass-ping' },
+  { file: '235911__yfjesse__notification-sound.m4a', label: 'notification' },
+  { file: '268756__morrisjm__dingaling.mp3', label: 'dingaling' },
+]
+const SOUNDS: readonly string[] = SOUND_FILES.map(sound => sound.file)
+
+// The sound picked, one choice for every session, kept in the plugin's store: a
+// file of SOUNDS, or anything else for none, the default.
+const SOUND = 'sound'
+const SILENT = 'off'
+
+const readSound = async ($: EngineInterface): Promise<string | undefined> => {
+  const saved: unknown = await $.store.get(SOUND).catch(() => undefined)
+  return typeof saved === 'string' && SOUNDS.includes(saved) ? saved : undefined
+}
+
+// Plays a sound without waiting for it: a play resolves only once the clip ends, and
+// the dialog or the turn that called for it must not wait on that.
+const play = ($: EngineInterface, sound: string): void => {
+  void $.audio.play({ asset: `sounds/${sound}` }).catch(() => undefined)
+}
+
+// Keeps the pick, and plays it once so the person hears what they picked.
+const chooseSound = async ($: EngineInterface, value: string): Promise<void> => {
+  const sound = SOUNDS.includes(value) ? value : undefined
+  await $.store.set(SOUND, sound ?? SILENT).catch(() => undefined)
+  $.ui.invalidate('ui.render')
+  if (sound !== undefined) play($, sound)
+}
+
+// Plays the picked sound as this session starts waiting on the person: 🔐 permission,
+// ❓ input, or 🙋 needs you. Only the session's own events call it, never a redraw,
+// which every session's timer runs. Every session plays it, whether or not a person is
+// at the prompt: the app starts its own sessions as if none were (design.md).
+const notify = async ($: EngineInterface): Promise<void> => {
+  const sound = await readSound($)
+  if (sound !== undefined) play($, sound)
+}
+
+// Whether the app's record of this session says its last turn asked the person
+// something, read past the pane's cache of records: the session's own check.
+const ownRecordAsks = async ($: EngineInterface): Promise<boolean> => {
+  if (home === undefined || own === undefined) return false
+  const dirs = (path: string): Promise<string[]> =>
+    $.fs.list(path).then(
+      entries => entries.filter(entry => entry.kind === 'dir').map(entry => `${path}/${entry.name}`),
+      () => [],
+    )
+  for (const account of await dirs(`${home}/${RECORDS}`)) {
+    for (const org of await dirs(account)) {
+      const text = await $.fs.read(`${org}/${own}.json`).catch(() => undefined)
+      if (typeof text === 'string' && asksPerson(text) === true) return true
+    }
+  }
+  return false
+}
+
+// The main turn whose answer is watched for a question.
+let watched: string | undefined
+
+// Plays the sound once the main turn's answer leaves the session needing the person.
+// The app writes its record of the turn's question around the turn's end, so the
+// record is read at once and then a few times over ten seconds, while the session
+// stays idle with nothing in the background and no later turn has ended.
+const watchQuestion = async ($: EngineInterface, turnId: string): Promise<void> => {
+  watched = turnId
+  const isWaiting = (): boolean => watched === turnId && asked?.state === IDLE && asked.note === ''
+  const check = async (): Promise<boolean> => {
+    if (!isWaiting() || !(await ownRecordAsks($)) || !isWaiting()) return false
+    await notify($)
+    return true
+  }
+  if (await check()) return
+  void (async () => {
+    for (const wait of [1000, 2000, 7000]) {
+      const isSlept = await $.clock.sleep(wait).then(
+        () => true,
+        () => false,
+      )
+      if (!isSlept || !isWaiting() || (await check())) return
+    }
+  })()
+}
+
 // When the app last saw the session active. The file's `updated` stands in only
 // without the app's list: a process the app restarts writes it (observed).
 const activeAt = (row: Row): number => appSessions?.get(row.id)?.lastActivity ?? row.filed.updated
@@ -682,6 +797,37 @@ const pinToRecent = async ($: EngineInterface, id: string, isPinned: boolean): P
     const { [id]: undone, ...moves } = await readMoved($)
     if (undone !== undefined) await $.store.set(MOVED, moves).catch(() => undefined)
   }
+  $.ui.invalidate('ui.render')
+}
+
+// The sessions whose 🙋 needs you the person dismissed, by id, with when, kept the
+// same way, for both views.
+const DISMISSED = 'dismissedNeedsYou'
+type Dismissed = Record<string, number>
+
+const readDismissed = ($: EngineInterface): Promise<Dismissed> => readStamps($, DISMISSED)
+
+// Whether a dismissal still holds: the session got no message, activity or run
+// since, so its next question needs the person again.
+const dismissedIn =
+  (dismissed: Dismissed): ((row: Row) => boolean) =>
+  row => {
+    const at = dismissed[row.id]
+    return at !== undefined && lastOf(row) <= at
+  }
+
+// Dismisses a session's 🙋 needs you, and forgets the dismissals that no longer hold,
+// both read from the sessions as they stand at the press: one that got a message
+// since the draw is not dismissed. Dated no earlier than the row's own times, as a
+// move to Today is.
+const dismiss = async ($: EngineInterface, id: string): Promise<void> => {
+  const rows = await sessionRows($)
+  const row = rows.find(one => one.id === id)
+  if (row === undefined || row.filed.state !== NEEDS_YOU) return
+  const dismissed = await readDismissed($)
+  const holds = dismissedIn(dismissed)
+  const kept = Object.fromEntries(rows.filter(holds).map(one => [one.id, dismissed[one.id] as number]))
+  await $.store.set(DISMISSED, { ...kept, [id]: Math.max(Date.now(), lastOf(row)) }).catch(() => undefined)
   $.ui.invalidate('ui.render')
 }
 
@@ -867,7 +1013,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const { Box, Button, Select, Text } = $.ui.resolve(e)
     const rows = await sessionRows($)
     const isByTime = await readByTime($)
     const moved = isByTime ? await readMoved($) : {}
@@ -883,13 +1029,15 @@ export const register: Register = on => {
     // names its project, so a line between the two does. Inside a button the
     // app draws one line of plain text, whatever the Text in it asks for (observed).
     // In Recent the state line ends with the row's buttons together at its right: one
-    // to Today for an idle session not pinned, then Pin, or Unpin. Kept together they
+    // to Today for an idle session not pinned, Dismiss for one that needs the person
+    // (in the Projects view too), then Pin, or Unpin. Kept together they
     // read as the row's actions, and Pin lines up down the box. The name keeps its
     // line whole, so a long one does not push Pin out.
     const isRecent = recentAmong(rows)
     const session = (row: Row, canMove: boolean, pin?: 'Pin' | 'Unpin') => {
       const { state, note, since } = row.filed
       const color = colorOf(state, isRecent(row))
+      const canDismiss = state === NEEDS_YOU
       const rest = `${note === '' ? '' : ` ${note}`} · ${lasted(since, now)}`
       const link = linkOf(row.id)
       // The page draws an https link alone, so the session's link goes to
@@ -920,10 +1068,13 @@ export const register: Register = on => {
                 {rest}
               </Text>
             </Box>
-            {(canMove || pin !== undefined) && (
+            {(canMove || canDismiss || pin !== undefined) && (
               <Box alignItems="center" columnGap="sm">
                 {canMove && (
                   <Button key={`today:${row.id}`} label="→ Today" plain onPress={() => void moveToToday($, row.id)} />
+                )}
+                {canDismiss && (
+                  <Button key={`dismiss:${row.id}`} label="Dismiss" plain onPress={() => void dismiss($, row.id)} />
                 )}
                 {pin !== undefined && (
                   <Button
@@ -939,31 +1090,47 @@ export const register: Register = on => {
         </Box>
       )
     }
+    const sound = await readSound($)
     // Each project is a card with rounded corners, as the app's own panel draws them.
     // The two buttons above them pick the view. The elements hold no segmented
     // control, so a border around both is its track, the one in force a primary chip
-    // and the other plain, with none. The app's own header above takes nothing from a mod.
+    // and the other plain, with none. The 🔔 Alert menu sits at the far right of their
+    // line, there with no session too. The app's own header above takes nothing from a mod.
     return (
       <Box flexDirection="column" gap={1}>
+        <Box alignItems="center" justifyContent="space-between" columnGap="sm">
+          {rows.length > 0 ? (
+            <Box alignItems="center" borderStyle="round" borderColor="subtle" padding={0}>
+              <Button
+                key="view:time"
+                label="Time"
+                variant="primary"
+                plain={isByTime ? undefined : true}
+                onPress={() => void chooseByTime($, true)}
+              />
+              <Button
+                key="view:projects"
+                label="Projects"
+                variant="primary"
+                plain={isByTime ? true : undefined}
+                onPress={() => void chooseByTime($, false)}
+              />
+            </Box>
+          ) : (
+            <Box />
+          )}
+          <Select
+            key="sound"
+            label="🔔 Alert"
+            options={[
+              { value: SILENT, label: 'Off' },
+              ...SOUND_FILES.map(({ file, label }) => ({ value: file, label })),
+            ]}
+            value={sound ?? SILENT}
+            onSelect={value => void chooseSound($, value)}
+          />
+        </Box>
         {rows.length === 0 && <Text dimColor>No session has written its state yet.</Text>}
-        {rows.length > 0 && (
-          <Box alignSelf="flex-start" alignItems="center" borderStyle="round" borderColor="subtle" padding={0}>
-            <Button
-              key="view:time"
-              label="Time"
-              variant="primary"
-              plain={isByTime ? undefined : true}
-              onPress={() => void chooseByTime($, true)}
-            />
-            <Button
-              key="view:projects"
-              label="Projects"
-              variant="primary"
-              plain={isByTime ? true : undefined}
-              onPress={() => void chooseByTime($, false)}
-            />
-          </Box>
-        )}
         {isByTime && byTime(rows, now, moved, pinned).map(([heading, inBox]) => (
           <Box flexDirection="column" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
             <Text dimColor weight="medium">
@@ -1009,6 +1176,9 @@ export const register: Register = on => {
     // turn runs (observed): taken for the main turn's, it made that turn's end look late.
     if (e.agentId !== undefined) return next(e)
     lastAnswer = undefined
+    // An earlier answer's watch for a question ends: an interrupt of this turn is
+    // idle again, and must not play what that answer's record says late.
+    watched = undefined
     isTurnLive = true
     liveTurn = e.turnId
     jobs = 0
@@ -1029,6 +1199,7 @@ export const register: Register = on => {
     const state = isCurrent ? await resting($) : e.agentId !== undefined ? await settled($, e.agentId) : undefined
     const tasks = isCurrent ? ` jobs=[${listed}]` : ''
     await emit($, `turn.complete agent=${who(e.agentId)} reason=${e.reason} turn=${e.turnId}${tasks}`, state)
+    if (isCurrent && e.reason === 'answer') await watchQuestion($, e.turnId)
     return next(e)
   })
 

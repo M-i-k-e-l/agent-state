@@ -70,10 +70,15 @@ Each session in **Recent** ends its state line with **Pin**, which keeps it in *
 press **Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
 unchanged, so a pinned idle session older than Recent's 2 hours draws dim.
 
+**🔔 Alert**, at the far right of the **Time** and **Projects** line, picks a sound, for every session; **Off**, the default,
+plays none. Picking one plays it once. Every session then plays it when it turns 🔐 permission, ❓ input or 🙋 needs
+you. The sounds are CC0, from [Freesound](https://freesound.org); `hooks/register.tsx` credits each one.
+
 An idle session whose last turn ended asking you something shows 🙋 needs you, the session you are in too. It follows the
 app's own check of whether a session waits on you: the next-step box asked you a question, or, with no such box, the
 app's summary of the turn says it is blocked or needs your input. It stays until you send the session a message. Like
-permission and input, it sits in **Recent** and has no **→ Today**.
+permission and input, it sits in **Recent** and has no **→ Today**. **Dismiss**, in both views (before **Pin** in
+Recent), shows it idle instead, for every session's pane, until the session gets a message, activity or a run.
 
 The state's color means the same in both views: the theme's `error` for permission, input and needs you, its `success`
 for working, background and compacting, its `warning` for an idle session that counts as Recent, and dim for any other
