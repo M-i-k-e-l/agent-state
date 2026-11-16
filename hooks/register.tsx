@@ -1136,7 +1136,11 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Select, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Button, Text } = ui
+    // The mobile app draws no menu (the engine's types), so there the pane has no
+    // 🔔 Alert; another surface's choice still plays.
+    const Select = 'Select' in ui ? ui.Select : undefined
     const rows = await sessionRows($)
     const isByTime = await readByTime($)
     const moved = isByTime ? await readMoved($) : {}
@@ -1242,16 +1246,18 @@ export const register: Register = on => {
           ) : (
             <Box />
           )}
-          <Select
-            key="sound"
-            label="🔔 Alert"
-            options={[
-              { value: SILENT, label: 'Off' },
-              ...SOUND_FILES.map(({ file, label }) => ({ value: file, label })),
-            ]}
-            value={sound ?? SILENT}
-            onSelect={value => void chooseSound($, value)}
-          />
+          {Select !== undefined && (
+            <Select
+              key="sound"
+              label="🔔 Alert"
+              options={[
+                { value: SILENT, label: 'Off' },
+                ...SOUND_FILES.map(({ file, label }) => ({ value: file, label })),
+              ]}
+              value={sound ?? SILENT}
+              onSelect={value => void chooseSound($, value)}
+            />
+          )}
         </Box>
         {rows.length === 0 && <Text dimColor>No session has written its state yet.</Text>}
         {isByTime && byTime(rows, now, moved, pinned).map(([heading, inBox]) => (
