@@ -290,7 +290,7 @@ const tick = ($: EngineInterface): void => {
 // Redraws the pane and the button, and follows the shared open or closed choice,
 // while a surface shows the session: the app, or another device. One the app is not
 // showing has no surface (observed): its drawing is seen by no one, and each redraw
-// reads every session's file. The session on screen reads the others' states from
+// lists every session's file. The session on screen reads the others' states from
 // their files, so their rows stay current; switching to a session redraws it at once
 // (session.attach). A hidden session fetched no list, so a switch to it first takes
 // the list saved by the session that was on screen: the fetch it starts ends only
@@ -372,21 +372,43 @@ const linkOf = (id: string): string => appSessions?.get(id)?.link ?? `claude://c
 
 type Row = { id: string; filed: Filed }
 
-// Every session file, read as it stands now.
+// What each session file said, by path, with the time and size it had when read:
+// a file is read again only once either changes. A read that failed or was not
+// JSON keeps nothing, so the next redraw reads it again.
+let filedCache = new Map<string, { mtimeMs: number; size: number; filed: Filed | undefined }>()
+
+// Every session file as it stands now, reading only those that changed since the
+// last redraw: the listing gives each file's time and size, and a redraw comes
+// every second.
 const listFiled = async ($: EngineInterface, from: string): Promise<Row[]> => {
-  const entries = await $.fs.list(from).catch(() => [])
+  const entries = await $.fs.list(from).catch(() => undefined)
+  // A listing that failed keeps nothing, so the next one reads every file.
+  if (entries === undefined) {
+    filedCache = new Map()
+    return []
+  }
   const rows: Row[] = []
+  const seen = new Map<string, { mtimeMs: number; size: number; filed: Filed | undefined }>()
   for (const entry of entries) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    const text = await $.fs.read(`${from}/${entry.name}`).catch(() => undefined)
-    if (typeof text !== 'string') continue
-    try {
-      const filed = JSON.parse(text) as Filed
-      if (typeof filed.state === 'string') rows.push({ id: entry.name.slice(0, -5), filed })
-    } catch {
-      // A file caught mid-write reads whole on the next redraw.
+    const path = `${from}/${entry.name}`
+    const was = filedCache.get(path)
+    let filed = was?.filed
+    if (was === undefined || was.mtimeMs !== entry.mtimeMs || was.size !== entry.size) {
+      const text = await $.fs.read(path).catch(() => undefined)
+      if (typeof text !== 'string') continue
+      try {
+        const parsed = JSON.parse(text) as Filed
+        filed = typeof parsed?.state === 'string' ? parsed : undefined
+      } catch {
+        // A file caught mid-write reads whole on the next redraw.
+        continue
+      }
     }
+    seen.set(path, { mtimeMs: entry.mtimeMs, size: entry.size, filed })
+    if (filed !== undefined) rows.push({ id: entry.name.slice(0, -5), filed })
   }
+  filedCache = seen
   return rows
 }
 

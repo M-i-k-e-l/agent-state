@@ -27,12 +27,14 @@ const drawModes = (on: On): void => {
 }
 
 // Stands for the engine beneath the mod: a file system held in a map, the
-// environment given, and no tab to write to. Each process run is kept in `ran`.
+// environment given, and no tab to write to. Each process run is kept in `ran`,
+// and each path read in `read`.
 const engine = (
   on: On,
   env: Record<string, string>,
   files: Map<string, string>,
   ran: (readonly string[])[] = [],
+  read: string[] = [],
 ): void => {
   drawModes(on)
   on('process.run', (_$, e) => {
@@ -49,7 +51,10 @@ const engine = (
     files.set(e.path, e.text)
     return { value: undefined }
   })
-  on('fs.read', (_$, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.read', (_$, e) => {
+    read.push(e.path)
+    return { value: files.get(e.path) ?? '' }
+  })
   on('fs.exists', (_$, e) => ({ value: [...files.keys()].some(path => path === e.path || path.startsWith(`${e.path}/`)) }))
   // The store sits in the map too. Most of these tests draw the projects; one that
   // wants the other view says so.
@@ -58,7 +63,9 @@ const engine = (
     files.set(`store:${e.key}`, JSON.stringify(e.value))
     return { value: undefined }
   })
-  // A path deeper down lists as a folder. A file's time is the map's `mtime:<path>`, or 0.
+  // A path deeper down lists as a folder. A file's size is its text's length, and its
+  // time the map's `mtime:<path>`, or else one that changes with its text, as a
+  // write changes it on disk.
   // A folder the map names as `fail:<path>` fails to list, and so does one that is
   // missing, as on disk.
   on('fs.list', (_$, e) => {
@@ -74,13 +81,16 @@ const engine = (
       value: [...children].map(([name, kind]) => ({
         name,
         kind,
-        size: 1,
-        mtimeMs: Number(files.get(`mtime:${e.path}/${name}`) ?? 0),
+        size: (files.get(`${e.path}/${name}`) ?? '').length,
+        mtimeMs: Number(files.get(`mtime:${e.path}/${name}`) ?? textTime(files.get(`${e.path}/${name}`) ?? '')),
         isLink: false,
       })),
     }
   })
 }
+
+// A time that differs for each text, standing for when a file was last written.
+const textTime = (text: string): number => [...text].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 7)
 
 const stateIn = (files: Map<string, string>, path: string): unknown =>
   (JSON.parse(files.get(path) ?? '{}') as { state?: unknown }).state
@@ -374,6 +384,52 @@ test('how long a state lasted reads in words, then as when it began past a day; 
   await ui.unmount()
 })
 
+test("a session's file is read again only once its time or size changes, or its last read was torn", async ($, on) => {
+  const folder = '/Users/me/.claude/agent-state'
+  const filed = (title: string): string =>
+    JSON.stringify({ state: '💤 idle', note: '', since: Date.now(), title, cwd: '/x', updated: Date.now() })
+  const files = new Map([
+    [`${folder}/local_a.json`, filed('a')],
+    [`mtime:${folder}/local_a.json`, '1'],
+    [`${folder}/local_b.json`, filed('b')],
+    [`mtime:${folder}/local_b.json`, '1'],
+  ])
+  const read: string[] = []
+  engine(on, { HOME: '/Users/me' }, files, [], read)
+  const draw = async (): Promise<{ names: string[]; reads: string[] }> => {
+    read.length = 0
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const names = (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(2)
+    await ui.unmount()
+    return { names, reads: read.filter(path => path.startsWith(`${folder}/`)).map(path => path.slice(folder.length + 1)) }
+  }
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  expect((await draw()).names).toEqual(['a', 'b'])
+  // Nothing changed: nothing is read.
+  expect(await draw()).toEqual({ names: ['a', 'b'], reads: [] })
+
+  // A new time is read; so is a new size at the same time.
+  files.set(`${folder}/local_a.json`, filed('a2'))
+  files.set(`mtime:${folder}/local_a.json`, '2')
+  files.set(`${folder}/local_b.json`, filed('b22'))
+  expect(await draw()).toEqual({ names: ['a2', 'b22'], reads: ['local_a.json', 'local_b.json'] })
+
+  // A read caught mid-write leaves the session out, and is read again though
+  // nothing changed since.
+  files.set(`${folder}/local_a.json`, '{"state":')
+  files.set(`mtime:${folder}/local_a.json`, '3')
+  expect(await draw()).toEqual({ names: ['b22'], reads: ['local_a.json'] })
+  expect(await draw()).toEqual({ names: ['b22'], reads: ['local_a.json'] })
+  files.set(`${folder}/local_a.json`, filed('a3'))
+  files.set(`mtime:${folder}/local_a.json`, '4')
+  expect(await draw()).toEqual({ names: ['a3', 'b22'], reads: ['local_a.json'] })
+
+  // A file gone from the folder is gone from the pane.
+  files.delete(`${folder}/local_b.json`)
+  expect(await draw()).toEqual({ names: ['a3'], reads: [] })
+})
+
 test('the button under the prompt counts the sessions in each state, what waits on the person first', async ($, on) => {
   const filed = (state: string): string =>
     JSON.stringify({ state, note: '', since: Date.now(), cwd: '/x', updated: Date.now() })
@@ -420,6 +476,7 @@ test("an idle session whose last turn asked the person something needs them, as 
     // With no wrap-up, a summary counts when it is of the last message.
     [`${folder}/local_summary.json`, filed('💤 idle', 'summary', 4)],
     [`${records}/local_summary.json`, record({ postTurnSummary: { status_category: 'need_input' }, postTurnSummaryFor: 'u2' })],
+    [`mtime:${records}/local_summary.json`, '1'],
     [`${folder}/local_stale.json`, filed('💤 idle', 'stale', 5)],
     [`${records}/local_stale.json`, record({ postTurnSummary: { status_category: 'blocked' }, postTurnSummaryFor: 'u1' })],
     // Running: whatever its record says, it is working.
@@ -428,6 +485,7 @@ test("an idle session whose last turn asked the person something needs them, as 
     // Caught mid-write, and none at all.
     [`${folder}/local_torn.json`, filed('💤 idle', 'torn', 7)],
     [`${records}/local_torn.json`, '{"turnWrapUp":'],
+    [`mtime:${records}/local_torn.json`, '1'],
     [`${folder}/local_none.json`, filed('💤 idle', 'none', 8)],
     // Idle with a background command still running: the app counts it as running.
     [`${folder}/local_busy.json`, JSON.stringify({ ...JSON.parse(filed('💤 idle', 'busy', 9)), note: '⏳1' })],
