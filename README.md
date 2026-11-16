@@ -102,9 +102,10 @@ share on your machine: each session's state in `~/.claude/agent-state/`, the pan
 In iTerm2, the mod writes the state to the tab's terminal as an iTerm2 user variable, `user.claudeState`, which the
 Subtitle shows. It starts a short shell process only when the state changes, about two for each prompt you send.
 
-In the desktop app, each session writes its state to a file of its own. Every second, each session redraws its button
-and pane from those files. Every ten seconds, it fetches the app's list of sessions, which decides what shows and under
-what name.
+In the desktop app, each session writes its state to a file of its own. Every second, the session on screen redraws its
+button and pane from those files; a session nothing shows, in the app or on another device, doesn't redraw until you
+switch to it. Every ten seconds, the session on screen fetches the app's list of sessions, which decides what shows and
+under what name, and saves it for the others to take when you switch to them.
 
 ## Limits
 

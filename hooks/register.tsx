@@ -284,10 +284,24 @@ let isTicking = false
 const tick = ($: EngineInterface): void => {
   if (isTicking) return
   isTicking = true
-  $.clock.every(1000, () => {
-    $.ui.invalidate('ui.render')
-    void followPane($)
-  })
+  $.clock.every(1000, () => void redraw($))
+}
+
+// Redraws the pane and the button, and follows the shared open or closed choice,
+// while a surface shows the session: the app, or another device. One the app is not
+// showing has no surface (observed): its drawing is seen by no one, and each redraw
+// reads every session's file. The session on screen reads the others' states from
+// their files, so their rows stay current; switching to a session redraws it at once
+// (session.attach). A hidden session fetched no list, so a switch to it first takes
+// the list saved by the session that was on screen: the fetch it starts ends only
+// after that draw. The list is taken whatever the surfaces say, so a roster that
+// lists the app late does not leave the next tick drawing the old one.
+const redraw = async ($: EngineInterface, isSwitch = false): Promise<void> => {
+  if (isSwitch) await loadSavedSessions($)
+  const surfaces = await $.session.surfaces().catch(() => [])
+  if (surfaces.length === 0) return
+  $.ui.invalidate('ui.render')
+  await followPane($)
 }
 
 // A session as the app's own session tools list it.
@@ -667,8 +681,9 @@ const chooseSound = async ($: EngineInterface, value: string): Promise<void> => 
 
 // Plays the picked sound as this session starts waiting on the person: 🔐 permission,
 // ❓ input, or 🙋 needs you. Only the session's own events call it, never a redraw,
-// which every session's timer runs. Every session plays it, whether or not a person is
-// at the prompt: the app starts its own sessions as if none were (design.md).
+// which every session a surface shows runs each second. Every session plays it,
+// whether or not a person is at the prompt: the app starts its own sessions as if
+// none were (design.md).
 const notify = async ($: EngineInterface): Promise<void> => {
   const sound = await readSound($)
   if (sound !== undefined) play($, sound)
@@ -887,14 +902,12 @@ const choosePane = async ($: EngineInterface, isOpen: boolean): Promise<void> =>
 let isFollowing = false
 
 // Opens or closes this session's pane to match the choice. The choice is read
-// last, so a press that changed it while the panes were read is not undone. A
-// session the app is not showing has no surface to open it on (observed), and
-// follows when the app attaches to it again.
+// last, so a press that changed it while the panes were read is not undone. Only
+// redraw calls it, while a surface shows the session: one the app is not showing has
+// no surface to place the pane on (observed), and follows once a surface shows it again.
 const followPane = async ($: EngineInterface): Promise<void> => {
   const path = paneFile()
   if (path === undefined || isFollowing) return
-  const surfaces = await $.session.surfaces().catch(() => [])
-  if (surfaces.length === 0) return
   isFollowing = true
   const panes = await $.ui.panes().catch(() => [])
   const isOpen = (await $.fs.read(path).catch(() => undefined)) === 'true'
@@ -971,12 +984,13 @@ export const register: Register = on => {
 
   // The desktop app attaches after session.start, which names no surface there,
   // and again each time the person switches to the session. The button's count
-  // redraws from then on, and the pane follows the choice shared by the sessions.
+  // redraws from then on while a surface shows the session, and the pane follows
+  // the choice shared by the sessions.
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
     if (e.surface === 'desktop') {
       tick($)
-      await followPane($)
+      await redraw($, true)
     }
     return attached
   })

@@ -152,9 +152,9 @@ and the file write stands ahead of that gate.
 | Names come from the app                      | `session_title` can be the session it was started from (observed)       |
 | The mod's own fetches skip its `tool.call`   | the engine raises it on the main loop; its end wrote ⚙️ over ❓ and 🔐  |
 | A resumed idle dates from the last answer    | `seconds_since_last_response` says when; the restart is not when        |
-| The last list is saved for the next process  | the first draw need not wait for a fetch                                |
+| The last list is saved for the next process, and for a session switched back to | the first draw need not wait for a fetch; a hidden session fetches nothing, so the list it held is old |
 | One file holds the pane's open or closed     | a pane belongs to a session; each follows the file on a one second timer |
-| A session with no surface does not follow it | it would try to open the pane every second, and fail                    |
+| A session with no surface does not redraw or follow on the timer, and does both once a surface shows it: at the app's attach, or the next tick if the app is listed late | no one sees its drawing, each redraw reads every session's file, and a follow would ask every second to open or close a pane no surface shows; the session on screen reads the others' files, so their rows stay current |
 | A click opens a session through `open`       | a pane draws only an `https:` link; the app's link is `claude://`       |
 | The plugin's store holds the pane's view     | every session's pane shows one view; a choice made in one held when moving to another (observed) |
 | The view is two buttons in one border, the chosen one primary, the other plain | a mod's elements hold no segmented control |

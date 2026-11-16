@@ -564,6 +564,84 @@ test('the app attaching to a session leaves the pane closed', async ($, on) => {
   expect(ticks).toBe(1)
 })
 
+test('the timer redraws only while the app shows the session, and switching back redraws at once', async ($, on) => {
+  let draws = 0
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    draws += 1
+    const { Text } = $.ui.resolve(e)
+    return <Text>modes</Text>
+  })
+  let surfaces: 'desktop'[] = ['desktop']
+  on('session.surfaces', () => ({ value: surfaces }))
+  on('session.attach', (_$, e) => ({ clientId: e.clientId }))
+  const clock = mock.clock(on)
+  const attach = () => $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+
+  await attach()
+  const ui = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
+  const shown = draws
+  await clock.advance(3000)
+  expect(draws).toBe(shown + 3)
+
+  // The person switched to another session: no surface, no redraws.
+  surfaces = []
+  const away = draws
+  await clock.advance(3000)
+  expect(draws).toBe(away)
+
+  // And back: drawn at the attach, then on each tick again.
+  surfaces = ['desktop']
+  await attach()
+  await clock.settle()
+  expect(draws).toBe(away + 1)
+  await clock.advance(1000)
+  expect(draws).toBe(away + 2)
+  await ui.unmount()
+})
+
+test("switching back to a session draws the list the session on screen saved, not the one it held while hidden", async ($, on) => {
+  const path = '/Users/me/.claude/agent-state.sessions.json'
+  const listed = (title: string) => JSON.stringify([['local_a', { title, cwd: '/x', lastActivity: Date.now() }]])
+  const files = new Map([[path, listed('Old title')]])
+  engine(on, { HOME: '/Users/me' }, files)
+  // The app's tools fail: the list is only ever the saved one.
+  on('mcp.call', () => {
+    throw new Error('no app tools')
+  })
+  let surfaces: 'desktop'[] = ['desktop']
+  on('session.surfaces', () => ({ value: surfaces }))
+  on('session.attach', (_$, e) => ({ clientId: e.clientId }))
+  const clock = mock.clock(on)
+  const attach = () => $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  const names = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ text: string }[]> }) =>
+    (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(2)
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  await attach()
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await names(ui)).toEqual(['Old title'])
+
+  // Hidden while the session on screen saves a newer list.
+  surfaces = []
+  files.set(path, listed('New title'))
+  await clock.advance(3000)
+
+  surfaces = ['desktop']
+  await attach()
+  await clock.settle()
+  expect(await names(ui)).toEqual(['New title'])
+
+  // A switch the roster lists late still takes the saved list, for the next tick to draw.
+  surfaces = []
+  files.set(path, listed('Newer title'))
+  await clock.advance(3000)
+  await attach()
+  surfaces = ['desktop']
+  await clock.advance(1000)
+  expect(await names(ui)).toEqual(['Newer title'])
+  await ui.unmount()
+})
+
 test('the pane is open or closed for every session: each follows the shared choice', async ($, on) => {
   const files = new Map<string, string>()
   engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' }, files)
@@ -590,11 +668,16 @@ test('the pane is open or closed for every session: each follows the shared choi
   const follow = () => $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
-  // A session the app is not showing does not try.
+  // A session the app is not showing does not try, to open or to close.
   files.set(path, 'true')
   surfaces = []
   await follow()
   expect(done).toEqual([])
+  isOpen = true
+  files.set(path, 'false')
+  await follow()
+  expect(done).toEqual([])
+  isOpen = false
   surfaces = ['desktop']
   files.delete(path)
 
