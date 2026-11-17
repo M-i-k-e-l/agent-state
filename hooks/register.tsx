@@ -136,7 +136,7 @@ type Filed = {
 
 // This session's file, set at session.start; undefined when it writes none: any
 // session the desktop app does not host, such as one in an iTerm2 tab, whose
-// state its tab shows.
+// state its tab shows, or one a session of the app started.
 let file: string | undefined
 let cwd = ''
 // The session's title, as the classic hooks last reported it.
@@ -269,7 +269,8 @@ const settled = async ($: EngineInterface, agentId: string): Promise<string | un
 
 // The folder of session files, set at session.start once the home folder is known.
 let folder: string | undefined
-// The app's id for this session, which names its file; undefined outside the app.
+// The app's id for this session, which names its file; undefined outside the app,
+// and in a session one of the app's sessions started.
 let own: string | undefined
 
 const PANE = 'agent-state'
@@ -1041,6 +1042,11 @@ const retitle = async ($: EngineInterface, named: string | undefined): Promise<u
   if (asked !== undefined) await toFile($, 'retitle', asked.state, asked.note, true)
 }
 
+// Whether an environment variable the engine reads as a switch is on: set, and not
+// to a word for off, as the engine reads its own (read from its code).
+const isOn = (value: string | undefined): boolean =>
+  value !== undefined && !['', '0', 'false', 'no', 'off'].includes(value.toLowerCase())
+
 // Reads back when the person last messaged this session and when it last ran, as
 // an earlier process filed them. What happened meanwhile stands.
 const loadPrompted = async ($: EngineInterface): Promise<void> => {
@@ -1060,7 +1066,18 @@ export const register: Register = on => {
     const started = await next(e)
     isHeadless = !e.isInteractive
     home = await $.env.get('HOME').catch(() => undefined)
-    const host = await $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined)
+    // A session one of the app's sessions starts, as a test that runs `claude -p`,
+    // takes that session's environment, its id for the app with it (observed): it
+    // filed its own states over the app session's, and its end left that session,
+    // still working, shown idle. The engine gives what a session's tools and hooks
+    // start CLAUDE_CODE_CHILD_SESSION and CLAUDECODE, and its MCP servers
+    // CLAUDECODE alone (the tools' and the servers' observed, the hooks' read from
+    // its code); the process the app starts has neither (observed). So a session
+    // with either is not the app's: it files nothing, and reads no record as its own.
+    const isChild =
+      isOn(await $.env.get('CLAUDE_CODE_CHILD_SESSION').catch(() => undefined)) ||
+      isOn(await $.env.get('CLAUDECODE').catch(() => undefined))
+    const host = isChild ? undefined : await $.env.get('CLAUDE_CODE_HOST_SESSION_ID').catch(() => undefined)
     cwd = await $.session.cwd().catch(() => '')
     folder = home === undefined ? undefined : `${home}/${FOLDER}`
     logFile = await $.env.get('AGENT_STATE_LOG').catch(() => undefined)
@@ -1068,7 +1085,7 @@ export const register: Register = on => {
     file = folder !== undefined && host !== undefined ? `${folder}/${host}.json` : undefined
     filed = undefined
     await loadPrompted($)
-    await emit($, `session.start surface=${e.surface} interactive=${e.isInteractive}`, IDLE)
+    await emit($, `session.start surface=${e.surface} interactive=${e.isInteractive} child=${isChild}`, IDLE)
     return started
   })
 

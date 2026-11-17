@@ -122,6 +122,49 @@ test('a session the app does not host writes no file: an iTerm2 tab, a -p run', 
   expect([...files.keys()]).toEqual([])
 })
 
+// The environment a session started by the app's session takes: the app's id for
+// that session, and the engine's marks of what a session starts, both for a tool's
+// command and one alone for an MCP server.
+const STARTERS = [
+  ['a tool', { CLAUDE_CODE_CHILD_SESSION: '1', CLAUDECODE: '1' }],
+  ['an MCP server', { CLAUDECODE: '1' }],
+] as const
+
+for (const [starter, marks] of STARTERS) {
+  test(`a session started by ${starter} of the app's session leaves that session's file and record alone`, async ($, on) => {
+    const path = '/Users/me/.claude/agent-state/local_1.json'
+    const working = JSON.stringify({ state: '⚙️ working', note: '', since: 1, cwd: '/x', updated: 1, prompted: 1 })
+    const record = '/Users/me/Library/Application Support/Claude/claude-code-sessions/acct/org/local_1.json'
+    const asking = JSON.stringify({ turnWrapUp: { needsUser: 'Which one?' } })
+    const files = new Map([
+      [path, working],
+      [record, asking],
+    ])
+    const read: string[] = []
+    engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1', ...marks }, files, [], read)
+
+    await $.session.start({ cwd: '/Users/me/project', surface: null, isInteractive: false })
+    await $.turn.start({ text: 'hi', turnId: 't1' })
+    await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' })
+    await $.session.end({ reason: 'other', sessionId: 'own-id', resume: { id: 'own-id' } })
+
+    expect([...files]).toEqual([
+      [path, working],
+      [record, asking],
+    ])
+    expect(read).toEqual([])
+  })
+}
+
+test("a mark switched off leaves the app's session filing its state", async ($, on) => {
+  const files = new Map<string, string>()
+  engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1', CLAUDE_CODE_CHILD_SESSION: '0', CLAUDECODE: '' }, files)
+
+  await $.session.start({ cwd: '/Users/me/project', surface: null, isInteractive: false })
+
+  expect(stateIn(files, '/Users/me/.claude/agent-state/local_1.json')).toBe('💤 idle')
+})
+
 test("the pane lists the sessions the app lists, by the app's titles, what waits on the person first", async ($, on) => {
   const now = Date.now()
   const filed = (state: string, title: string, minutesAgo: number): string =>

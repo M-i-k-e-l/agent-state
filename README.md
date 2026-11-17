@@ -141,6 +141,7 @@ In the desktop app:
 - 🙋 needs you reads the app's internal session records, not an API: an app update can change them, and the state then
   shows 💤 idle instead.
 - A turn that ended in an error shows 💤 idle, not as the app's red dot.
+- A Claude Code run that a session starts, such as a test that runs `claude -p`, is not listed.
 - Not tried: closing the pane with its own close mark, which should close it for every session.
 
 ## Development

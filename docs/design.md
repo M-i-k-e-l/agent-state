@@ -140,16 +140,23 @@ for the main agent and 🧵 for a background subagent, at the approval.
 
 ## The desktop app
 
-The same state logic feeds a second output. A session the app hosts (`CLAUDE_CODE_HOST_SESSION_ID` is set) writes its
-state to `~/.claude/agent-state/<id>.json`; any other session writes no file, and the tab's write is as it was. A session
+The same state logic feeds a second output. A session the app hosts (`CLAUDE_CODE_HOST_SESSION_ID` is set, and no mark
+of a session's child, below) writes its state to `~/.claude/agent-state/<id>.json`; any other session writes no file, and the tab's write is as it was. A session
 there starts with `surface` null and `isInteractive` false, so the tab's script turns itself off at the first write,
 and the file write stands ahead of that gate.
+
+A session that one of the app's sessions starts, such as a test that runs `claude -p`, takes that session's
+environment, `CLAUDE_CODE_HOST_SESSION_ID` with it. It is not the app's session, so it writes no file. The marks are
+`CLAUDE_CODE_CHILD_SESSION` and `CLAUDECODE`: the engine sets both for what a session's tools and hooks start, and
+`CLAUDECODE` alone for its MCP servers (the tools' and the servers' observed, the hooks' read from its code). The process
+the app starts has neither (observed, every session running at the time). Either one set, and not to `0`, `false`, `no` or `off`, counts.
 
 | Decision                                     | Why                                                                     |
 | -------------------------------------------- | ----------------------------------------------------------------------- |
 | The app's list decides what shows            | a file says neither that a session was archived nor what it is called   |
 | A listed session with no live file is idle   | the app stops the process of a session left alone; its file says ended  |
 | Names come from the app                      | `session_title` can be the session it was started from (observed)       |
+| A session started by a session's tool, hook or MCP server writes no file | it takes the app's id from that session's environment: its states went into that session's file, and its end left a working session shown idle (observed) |
 | The mod's own fetches skip its `tool.call`   | the engine raises it on the main loop; its end wrote ⚙️ over ❓ and 🔐  |
 | A resumed idle dates from the last answer    | `seconds_since_last_response` says when; the restart is not when        |
 | The last list is saved for the next process, and for a session switched back to | the first draw need not wait for a fetch; a hidden session fetches nothing, so the list it held is old |
@@ -203,6 +210,11 @@ with its own close mark, as the test kit cannot act as a person there either.
   read says it is up: no hook event, no render component, and `classic.Notification` is not known to fire for it. The
   engine logs `tengu_auto_mode_env_onboarding_shown`, `_accept`, `_later` and `_dismiss` (names read from the binary) on
   the `anthropic` telemetry stream, and a mod with a hook on that stream is not loaded: it is for the built-in plugins.
+- The app started from a shell that carries `CLAUDE_CODE_CHILD_SESSION` or `CLAUDECODE`, such as one a session's tool
+  runs, may hand the mark to every session it hosts: none would write a file, and all would show idle. Not tried; the
+  `session.start` line of the log says `child=true` there.
+- A session moved to the background from one of the app's sessions has neither mark (read from the engine's code).
+  Not known: whether it keeps the app's id, and so writes over that session's file.
 - An "always allow" answer (`user_permanent`) has not been tried.
 - Ways of switching telemetry off other than `DISABLE_TELEMETRY=1` have not been tried.
 - Not known: whether the engine starts a second call while another call's dialog is up. If it does, one wrong case is
