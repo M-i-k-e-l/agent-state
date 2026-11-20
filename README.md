@@ -47,7 +47,8 @@ tested on. The hooks API it uses is early access and may change between releases
 ## The desktop app
 
 The **Sessions** button counts the app's sessions in each state, what waits on you first, such as
-`Sessions · 🔐1 ❓1 🙋1 ⚙️2 💤5`. Clicking it opens or closes the pane, for every session of the app.
+`Sessions · 🔐1 ❓1 🙋1 ⚙️2 ⏳1 💤5`. An idle session with a background command still running counts as ⏳, not 💤.
+Clicking it opens or closes the pane, for every session of the app.
 
 The pane lists the sessions under their projects, each with its name, its state and how long it has been in that state.
 The session you are in has a `›` before its name. Clicking a name opens that session. The ↑ and ↓ next to a project move
@@ -57,18 +58,19 @@ it up and down, for every session too.
 by your last message, newest first, with each session's project on a line of its own:
 
 - **Recent**: your latest message and the 2 hours before it, plus any session that ran in that time or is not idle.
+  An idle session with a background command still running (`⏳N`) counts as at work, so it stays in **Recent** too.
 - **Today**: the rest from today.
 - **Older**: everything else.
 
 A session with no message on record yet uses its last activity instead.
 
-An idle session in **Recent** has **→ Today** at the right of its state line, which moves it to **Today**, for every session's pane.
+An idle session in **Recent** with no background command running has **→ Today** at the right of its state line, which moves it to **Today**, for every session's pane.
 It goes back to **Recent** once you message it or it runs again, and to **Older** after midnight. The Projects view
 and the state's color are unchanged.
 
 Each session in **Recent** ends its state line with **Pin**, which keeps it in **Recent**, in its place by time, until you
 press **Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
-unchanged, so a pinned idle session older than Recent's 2 hours draws dim.
+unchanged, so a pinned idle session older than Recent's 2 hours, with no background command running, draws dim.
 
 **🔔 Alert**, at the far right of the **Time** and **Projects** line, picks a sound, for every session; **Off**, the default,
 plays none. Picking one plays it once. Every session then plays it when it turns 🔐 permission, ❓ input or 🙋 needs
@@ -81,7 +83,7 @@ permission and input, it sits in **Recent** and has no **→ Today**. **Dismiss*
 Recent), shows it idle instead, for every session's pane, until the session gets a message, activity or a run.
 
 The state's color means the same in both views: the theme's `error` for permission, input and needs you, its `success`
-for working, background and compacting, its `warning` for an idle session that counts as Recent, and dim for any other
+for working, background, compacting and idle `⏳N`, its `warning` for an idle session that counts as Recent, and dim for any other
 idle.
 
 ## What it reads

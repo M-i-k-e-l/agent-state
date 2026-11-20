@@ -19,6 +19,10 @@ const CLEARED = ''
 // app's own record of it says. Only the pane and the button show it.
 const NEEDS_YOU = '🙋 needs you'
 
+// A session at rest: idle with nothing in flight. Idle with background commands
+// still running, whatever they are, counts as at work in the pane.
+const isRested = (filed: { state: string; note: string }): boolean => filed.state === IDLE && filed.note === ''
+
 // $1 variable, $2 the state, $3 "1" to stamp the state with the date and time,
 // $4 the tty a write before this one found, or empty, $5 log line, $6 "1" when no
 // person is at the prompt (a -p run or the SDK), $7 text to put after the stamp, or empty.
@@ -595,11 +599,10 @@ const scanRecords = ($: EngineInterface, ids: Set<string>): Promise<void> => {
 // with background commands still running is not waiting, as the app counts it.
 // A session the person dismissed stays idle until its next message, activity or run.
 const withQuestions = async ($: EngineInterface, rows: Row[]): Promise<Row[]> => {
-  const isRested = (row: Row): boolean => row.filed.state === IDLE && row.filed.note === ''
-  await scanRecords($, new Set(rows.filter(isRested).map(row => row.id)))
+  await scanRecords($, new Set(rows.filter(row => isRested(row.filed)).map(row => row.id)))
   const isDismissed = dismissedIn(await readDismissed($))
   return rows.map(row =>
-    isRested(row) && records.get(row.id)?.isAsking === true && !isDismissed(row)
+    isRested(row.filed) && records.get(row.id)?.isAsking === true && !isDismissed(row)
       ? { id: row.id, filed: { ...row.filed, state: NEEDS_YOU } }
       : row,
   )
@@ -644,6 +647,10 @@ const rank = (state: string): number => {
   return at === -1 ? RANK.length : at
 }
 
+// Where the pane lists a session: idle with background commands goes with background.
+const rankOf = (filed: { state: string; note: string }): number =>
+  rank(filed.state === IDLE && filed.note !== '' ? BACKGROUND : filed.state)
+
 // How long a state has lasted, in words read at a glance (`now`, `5 min`,
 // `2 hours`), and past a day when it began.
 const lasted = (since: number, now: number): string => {
@@ -656,10 +663,11 @@ const lasted = (since: number, now: number): string => {
 }
 
 // The state's color in the subtitle: a session waiting on the person, one that has
-// not come to rest, and a recent idle one. Any other idle stays dim.
-const colorOf = (state: string, isRecent: boolean): string | undefined => {
+// not come to rest (idle with background commands too), and a recent idle one. Any
+// other idle stays dim.
+const colorOf = (state: string, note: string, isRecent: boolean): string | undefined => {
   if (state === PERMISSION || state === INPUT || state === NEEDS_YOU) return 'error'
-  if (state !== IDLE) return 'success'
+  if (state !== IDLE || note !== '') return 'success'
   return isRecent ? 'warning' : undefined
 }
 
@@ -859,7 +867,7 @@ const RECENT_WINDOW = 2 * 60 * 60 * 1000
 // message was.
 const recentAmong = (rows: Row[]): ((row: Row) => boolean) => {
   const from = Math.max(...rows.map(usedAt)) - RECENT_WINDOW
-  return row => row.filed.state !== IDLE || activeAt(row) >= from || usedAt(row) >= from
+  return row => !isRested(row.filed) || activeAt(row) >= from || usedAt(row) >= from
 }
 
 // The sessions the person moved out of Recent into Today, by id, with when, kept in
@@ -886,13 +894,13 @@ const readPinned = ($: EngineInterface): Promise<Pinned> => readStamps($, PINNED
 // fetched every ten seconds.
 const lastOf = (row: Row): number => Math.max(activeAt(row), usedAt(row), row.filed.ranAt ?? 0)
 
-// Whether a move still holds: the session is idle and neither got a message nor
-// ran since, so new work brings it back to Recent.
+// Whether a move still holds: the session is at rest and neither got a message nor
+// ran since, so new work, a background command too, brings it back to Recent.
 const movedIn =
   (moved: Moved): ((row: Row) => boolean) =>
   row => {
     const at = moved[row.id]
-    return at !== undefined && row.filed.state === IDLE && lastOf(row) <= at
+    return at !== undefined && isRested(row.filed) && lastOf(row) <= at
   }
 
 // Moves a session to Today, and forgets the moves that no longer hold, both read
@@ -902,7 +910,7 @@ const movedIn =
 const moveToToday = async ($: EngineInterface, id: string): Promise<void> => {
   const rows = await sessionRows($)
   const row = rows.find(one => one.id === id)
-  if (row === undefined || row.filed.state !== IDLE) return
+  if (row === undefined || !isRested(row.filed)) return
   const moved = await readMoved($)
   const holds = movedIn(moved)
   const kept = Object.fromEntries(rows.filter(holds).map(one => [one.id, moved[one.id] as number]))
@@ -1129,7 +1137,8 @@ export const register: Register = on => {
 
   // In the app, a button beside the session's modes under the prompt opens and
   // closes the pane, and counts the sessions in each state, what waits on the
-  // person first, so they show with the pane closed. The app draws it grey whatever color or background it
+  // person first, so they show with the pane closed. Idle with background commands
+  // is counted as ⏳. The app draws it grey whatever color or background it
   // asks for, and draws nothing there for a Client region (observed). What is
   // beneath, the app's modes and other mods', stays before it, so the order of
   // the mods does not matter. The terminal keeps its own line.
@@ -1138,10 +1147,14 @@ export const register: Register = on => {
     if (e.surface !== 'desktop') return drawing
     const { Box, Button } = $.ui.resolve(e)
     const rows = await sessionRows($)
-    const counts = RANK.map(state => {
-      const count = rows.filter(row => row.filed.state === state).length
-      return count === 0 ? '' : `${state.split(' ')[0]}${count}`
-    }).filter(count => count !== '')
+    // Idle with background commands counts apart, as ⏳ after background, where the
+    // pane lists it, and not as idle.
+    const atWork = rows.filter(row => row.filed.state === IDLE && row.filed.note !== '').length
+    const counts = RANK.flatMap(state => {
+      const count = rows.filter(row => row.filed.state === state && (state !== IDLE || isRested(row.filed))).length
+      const counted = count === 0 ? [] : [`${state.split(' ')[0]}${count}`]
+      return state === BACKGROUND && atWork > 0 ? [...counted, `⏳${atWork}`] : counted
+    })
     return (
       <Box flexDirection="row" alignItems="center" columnGap="sm">
         {drawing}
@@ -1162,7 +1175,7 @@ export const register: Register = on => {
     const isByTime = await readByTime($)
     const moved = isByTime ? await readMoved($) : {}
     const pinned = isByTime ? await readPinned($) : {}
-    rows.sort((a, b) => rank(a.filed.state) - rank(b.filed.state) || b.filed.since - a.filed.since)
+    rows.sort((a, b) => rankOf(a.filed) - rankOf(b.filed) || b.filed.since - a.filed.since)
     const now = Date.now()
     const groups = new Map<string, Row[]>()
     for (const row of rows) groups.set(projectOf(row), [...(groups.get(projectOf(row)) ?? []), row])
@@ -1180,7 +1193,7 @@ export const register: Register = on => {
     const isRecent = recentAmong(rows)
     const session = (row: Row, canMove: boolean, pin?: 'Pin' | 'Unpin') => {
       const { state, note, since } = row.filed
-      const color = colorOf(state, isRecent(row))
+      const color = colorOf(state, note, isRecent(row))
       const canDismiss = state === NEEDS_YOU
       const rest = `${note === '' ? '' : ` ${note}`} · ${lasted(since, now)}`
       const link = linkOf(row.id)
@@ -1285,7 +1298,7 @@ export const register: Register = on => {
             {inBox.map(row => {
               if (heading !== 'Recent') return session(row, false)
               const isPinned = pinned[row.id] !== undefined
-              return session(row, !isPinned && row.filed.state === IDLE, isPinned ? 'Unpin' : 'Pin')
+              return session(row, !isPinned && isRested(row.filed), isPinned ? 'Unpin' : 'Pin')
             })}
           </Box>
         ))}

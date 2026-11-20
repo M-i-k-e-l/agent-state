@@ -596,12 +596,14 @@ test('the button under the prompt counts the sessions in each state, what waits 
     ['/Users/me/.claude/agent-state/local_g.json', filed('💤 idle')],
     ['/Users/me/.claude/agent-state/local_h.json', filed('📦 compacting')],
     ['/Users/me/.claude/agent-state/local_i.json', filed('')],
+    // Idle with a background command still running is counted as ⏳, after 🧵, not as 💤.
+    ['/Users/me/.claude/agent-state/local_j.json', JSON.stringify({ ...JSON.parse(filed('💤 idle')), note: '⏳2' })],
   ])
   engine(on, { HOME: '/Users/me' }, files)
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
-  expect((await ui.find({ type: 'Button' }))?.text).toBe('Sessions · 🔐2 ❓1 📦1 ⚙️1 🧵1 💤2')
+  expect((await ui.find({ type: 'Button' }))?.text).toBe('Sessions · 🔐2 ❓1 📦1 ⚙️1 🧵1 ⏳1 💤2')
   await ui.unmount()
 })
 
@@ -640,7 +642,8 @@ test("an idle session whose last turn asked the person something needs them, as 
     [`${records}/local_torn.json`, '{"turnWrapUp":'],
     [`mtime:${records}/local_torn.json`, '1'],
     [`${folder}/local_none.json`, filed('💤 idle', 'none', 8)],
-    // Idle with a background command still running: the app counts it as running.
+    // Idle with a background command still running: the app counts it as running,
+    // and the pane lists it with what is at work.
     [`${folder}/local_busy.json`, JSON.stringify({ ...JSON.parse(filed('💤 idle', 'busy', 9)), note: '⏳1' })],
     [`${records}/local_busy.json`, record({ turnWrapUp: asked })],
   ])
@@ -658,12 +661,12 @@ test("an idle session whose last turn asked the person something needs them, as 
     'summary',
     'Dismiss',
     'working',
+    'busy',
     'told',
     'failed',
     'stale',
     'torn',
     'none',
-    'busy',
   ])
   const states = await ui.findAll({ type: 'Text', text: state })
   expect(states.map(one => one.text)).toEqual([
@@ -681,7 +684,7 @@ test("an idle session whose last turn asked the person something needs them, as 
   await ui.unmount()
 
   const button = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
-  expect((await button.find({ type: 'Button' }))?.text).toBe('Sessions · 🙋2 ⚙️1 💤6')
+  expect((await button.find({ type: 'Button' }))?.text).toBe('Sessions · 🙋2 ⚙️1 ⏳1 💤5')
   await button.unmount()
 
   // By time, it is in Recent, with Pin and no → Today, as a dialog's session is.
@@ -1743,4 +1746,71 @@ test('a Dismiss press from a pane drawn before the session got a message dismiss
   await ui.press({ key: 'dismiss:local_a' })
   expect(files.get('store:dismissedNeedsYou')).toBeUndefined()
   await ui.unmount()
+})
+
+test('idle with a background command counts as at work: in Recent, green, Pin and no → Today, and ranked with background', async ($, on) => {
+  const now = Date.now()
+  const hours = (count: number): number => now - count * 60 * 60 * 1000
+  const folder = '/Users/me/.claude/agent-state'
+  const app = '/Users/me/Dev/alpha'
+  const filed = (state: string, note: string, prompted: number): string =>
+    JSON.stringify({ state, note, since: now, cwd: app, updated: now, prompted })
+  // A move stored after everything the session did: only its background command undoes it.
+  const moves = JSON.stringify({ local_moved: now + 1000 })
+  const files = new Map([
+    ['store:isByTime', 'true'],
+    ['store:movedToToday', moves],
+    [`${folder}/local_latest.json`, filed('💤 idle', '', hours(0))],
+    // Messages from yesterday: only being at work keeps them in Recent.
+    [`${folder}/local_shell.json`, filed('💤 idle', '⏳1', hours(30))],
+    [`${folder}/local_job.json`, filed('⚙️ working', '', hours(29))],
+    [`${folder}/local_moved.json`, filed('💤 idle', '⏳2', hours(31))],
+    [`${folder}/local_old.json`, filed('💤 idle', '', hours(32))],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const listed = [
+    LISTED('local_latest', app, hours(0)),
+    LISTED('local_shell', app, hours(30)),
+    LISTED('local_job', app, hours(29)),
+    LISTED('local_moved', app, hours(31)),
+    LISTED('local_old', app, hours(32)),
+  ]
+  on('mcp.call', (_$, e) => ({
+    value: {
+      isError: false,
+      content: [{ type: 'text' as const, text: JSON.stringify(e.tool === 'list_sessions' ? listed : {}) }],
+    },
+  }))
+  type Drawn = { findAll: (query: { type?: 'Button' | 'Text'; text: RegExp | string }) => Promise<{ text: string; key?: string; props: Record<string, unknown> }[]> }
+  const names = async (ui: Drawn) => (await ui.findAll({ text: /^(Recent|Today|Older|local_\w+)$/ })).map(one => one.text)
+  const colors = async (ui: Drawn) => (await ui.findAll({ type: 'Text', text: '💤 idle' })).map(one => one.props.color)
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // The moved one is back in Recent: its move no longer holds.
+  expect(await names(ui)).toEqual(['Recent', 'local_latest', 'local_job', 'local_shell', 'local_moved', 'Older', 'local_old'])
+  const keys = async (text: RegExp) => (await ui.findAll({ type: 'Button', text })).map(one => one.key)
+  expect(await keys(/^→ Today$/)).toEqual(['today:local_latest'])
+  expect(await keys(/^Pin$/)).toEqual(['pin:local_latest', 'pin:local_job', 'pin:local_shell', 'pin:local_moved'])
+  expect(await colors(ui)).toEqual(['warning', 'success', 'success', undefined])
+  await ui.unmount()
+
+  // The projects list them after what is working and before what is idle, green too.
+  files.set('store:isByTime', 'false')
+  const projects = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const ranked = await names(projects)
+  expect(ranked[0]).toBe('local_job')
+  expect(ranked.slice(1, 3).sort()).toEqual(['local_moved', 'local_shell'])
+  expect(ranked.slice(3).sort()).toEqual(['local_latest', 'local_old'])
+  expect((await colors(projects)).slice(0, 2)).toEqual(['success', 'success'])
+  await projects.unmount()
+
+  // A → Today press from a pane drawn before the session started a background
+  // command moves nothing.
+  files.set('store:isByTime', 'true')
+  const stale = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  files.set(`${folder}/local_latest.json`, filed('💤 idle', '⏳1', hours(0)))
+  await stale.press({ key: 'today:local_latest' })
+  expect(files.get('store:movedToToday')).toBe(moves)
+  await stale.unmount()
 })
