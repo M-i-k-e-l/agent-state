@@ -72,9 +72,13 @@ Each session in **Recent** ends its state line with **Pin**, which keeps it in *
 press **Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
 unchanged, so a pinned idle session older than Recent's 2 hours, with no background command running, draws dim.
 
-**🔊**, at the far right of the **Time** and **Projects** line, picks a sound, for every session; **Off**, the default,
-plays none. Picking one plays it once. Every session then plays it when it turns 🔐 permission, ❓ input or 🙋 needs
-you. The sounds are CC0, from [Freesound](https://freesound.org); `hooks/register.tsx` credits each one.
+**🔊**, at the far right of the **Time** and **Projects** line, turns a sound on or off, for every session; it is off
+until you turn it on. Every session then plays it when it turns 🔐 permission, ❓ input or 🙋 needs you. **▼** beside
+it opens its menu: **Sound** picks which one, and plays it once; **Current session** says what the session you last
+opened in the app does: **Always play**, the default; **Silent while I'm at the Mac**, no sound from it while the Mac
+was used in the last minute; or **Always silent**, none from it even when you are away. The app does not say whether
+you are still looking at that session, so it counts as current while you are in another app too. Only one of the 🔊
+and 📱 menus is open at a time. The sounds are CC0, from [Freesound](https://freesound.org); `hooks/register.tsx` credits each one.
 
 **📱**, before it, sends a push to your phone when a session stops working and waits, for every session; it is off
 until you turn it on. The pushes go through [ntfy.sh](https://ntfy.sh), a free public service, to a topic that **▼**
@@ -82,11 +86,12 @@ next to it sets, and they are not private. [Push to your phone](docs/phone-push.
 opens and what to check when no push arrives.
 
 An idle session whose last turn ended asking you something shows 🙋 needs you, the session you are in too, and one
-with a background command still running as well: the question outranks ⏳. It follows the
+with a background command or a subagent still running as well: the question outranks ⏳ and 🧵. It follows the
 app's own check of whether a session waits on you: the next-step box asked you a question, or, with no such box, the
 app's summary of the turn says it is blocked or needs your input. It stays until you send the session a message. Like
 permission and input, it sits in **Recent** and has no **→ Today**. **Dismiss**, in both views (before **Pin** in
-Recent), shows it idle instead, for every session's pane, until the session gets a message, activity or a run.
+Recent), shows it as it was instead, idle or 🧵, for every session's pane. One Dismiss is for one question: it holds
+until you send the session a message or its next turn starts.
 
 The state's color means the same in both views: the theme's `error` for permission, input and needs you, its `success`
 for working, background, compacting and idle `⏳N`, its `warning` for an idle session that counts as Recent, and dim for any other

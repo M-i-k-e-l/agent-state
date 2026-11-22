@@ -70,7 +70,11 @@ Rules:
   `turnWrapUp` when the person sends a message and when a turn starts. The record does not say whether the session
   runs, so the mod's own idle stands for that, with or without `⏳N`. The app counts background work as running; the
   mod does not follow it there, as the question waits on the person whatever runs behind it, and a command that
-  never ends, a dev server, would hide the 🙋 for good. The sound and the push take the same rule.
+  never ends, a dev server, would hide the 🙋 for good. A session in 🧵, its main turn over and subagents still
+  running, takes the same rule. So do the sound and the push. One Dismiss is for one question, and a question is
+  its turn's: the session's file holds `turnAt`, when the main agent's last turn started, and a dismissal holds
+  until a later message or turn, whatever subagents or commands do meanwhile. A file with no `turnAt`, and a session
+  the app lists with no process, go by the last message, activity or run.
 
 ## Test table
 
@@ -173,7 +177,7 @@ the app starts has neither (observed, every session running at the time). Either
 | Activity, a state other than idle, or idle with background commands puts a session in Recent | a session running or waiting must not sink below what the person last messaged |
 | **→ Today** moves an idle session out of Recent until its next message, activity or run, and to Older after midnight, kept in the plugin's store | the person is done with it for now; new work on it is news again. Its color stays, as the Projects view does not know of the move |
 | **Pin** keeps a session in Recent, in its place by time like the rest, until **Unpin**, in any state, kept in the plugin's store; a pinned session has no **→ Today**, a pin outranks a move, and Unpin forgets the move | the person wants it at hand whatever its age, and Recent reads as one timeline, so a pin does not reorder it; Pin and **→ Today** sit together at the right of the state line, so they read as the row's actions and Pin lines up down the box; on the name's line a long name pushed Pin out, and spread across the state line → Today floated alone in a wide pane. Its color stays, as the Projects view does not know of pins. A stale pane can store a move under a pin, in either order of the writes; forgetting it on Unpin needs no guard on either press |
-| **Dismiss** shows a 🙋 needs you session idle until its next message, activity or run, in both views, kept in the plugin's store and dated no earlier than the row's own times | the person has seen the question and wants it off the list without answering; 🙋 is a state both views draw, so its button is in both, unlike → Today and Pin; a 🙋 session is never plain idle, so Dismiss and → Today never share a row, and once dismissed the session gets → Today like any idle one, or shows ⏳ again when it has background commands |
+| **Dismiss** shows a 🙋 needs you session as it was, idle or 🧵, until its next message or turn (its next message, activity or run where its file holds no `turnAt` or it has no process), in both views, kept in the plugin's store and dated no earlier than the row's own times | the person has seen the question and wants it off the list without answering; 🙋 is a state both views draw, so its button is in both, unlike → Today and Pin; a 🙋 session is never plain idle, so Dismiss and → Today never share a row, and once dismissed the session gets → Today like any idle one, or shows ⏳ again when it has background commands |
 | Idle with background commands (`⏳N`) counts as at work in the pane: in Recent, `success`, ranked with background, no **→ Today**, and counted as ⏳ after 🧵 on the button, not as 💤 | it is running as far as the person is concerned; what the commands are is not looked at, so a server keeps the session at work for as long as it runs |
 | A pin of a session the app does not list stays | the list can be stale, fail or stop at 200, and an archived session can come back; a pin no row has draws nothing |
 | A run is the file's `ranAt`, not `since` | a restart or a reload writes idle with a new `since`, which would undo a move though nothing ran |
@@ -239,8 +243,7 @@ for the phone, and what each option does, are in [phone-push.md](phone-push.md);
 - **Which sessions, and when.** A session the app hosts, as it leaves work: 🔐, ❓, 🙋 or 💤. Not a session's end,
   and not a session another session started. A 💤 waits up to 10 seconds on the app's record of the session, which
   may turn it into 🙋. A turn that ends with a command or a subagent still in the background has not left work and
-  sends no 💤, but its 🙋 is sent, once for the turn: the question waits on the person whatever runs behind it. With
-  subagents the pane still shows 🧵 and the sound does not play; only the push follows the question there. Not sent:
+  sends no 💤, but its 🙋 is sent, once for the turn: the question waits on the person whatever runs behind it. Not sent:
   with a dialog up, which pushed for itself, and for an interrupted turn, whose record may hold an older question. Known and left: a 💤 still in that wait goes out though the session ended or was cleared
   meanwhile, and though 📱 was turned off meanwhile.
 - **The topic** is a random UUID made on the Mac, or one the person types (16 to 64 letters, digits, `-` or `_`). It
@@ -284,8 +287,24 @@ What the app's drawing allows, found by trying:
 Done by hand: pushes on Android with Chrome in the background and with the ntfy tab closed, and on an iPhone from the
 Home Screen (a phone on another Claude account: the tap reached the Claude app); the tap on both; Push on idle off;
 Only when I'm away, both held and sent. Not tried: Keep missed pushes on a phone, the ntfy app in place of its
-web page, and 🙋 for a turn that asks with a command in the background (pane, sound, push and Dismiss) or with a subagent
-running (push).
+web page, and 🙋 for a turn that asks with a command in the background or with a subagent running (pane, sound,
+push and Dismiss).
+
+## The sound
+
+- **🔊 On/Off** and its **▼** menu sit after 📱's in Alerts. The store's `sound` holds the file in force, or `off`;
+  `soundPick` holds the last pick, so Off keeps it. On takes the pick, or the first sound where none was made. A
+  store from before 0.8.0 holds only `sound`, and reads the same: a file is On.
+- **One menu at a time.** The store's `pushMenu` holds both menus' open state in one value (`isOpen` for 📱,
+  `isSoundOpen` for 🔊), and a write that opens one leaves the other out. Opening 🔊 hides 📱's menu and keeps a
+  topic typed and not saved, which 📱's ▼ shows again; only 📱's own ▲ drops it.
+- **Current session** (`soundCurrent`: `play`, the default, `atMac` or `silent`) says what the session the person
+  last opened does with the sound: the app's record of each session holds `lastFocusedAt`, a time in milliseconds,
+  and the latest names that session. Read only as a sound is about to play, and only the records written since this
+  session's own time. The app does not say whether the person is still looking, so `atMac` also asks that a key or
+  the pointer was used in the last 60 seconds, its own time and not 📱's Away after; `silent` holds the sound
+  whatever the Mac says. A record or a time that can't be read plays the sound. A pick in the menu plays whatever
+  this says. The push does not follow it: Only when I'm away is the push's own.
 
 ## Phone push: might add later
 

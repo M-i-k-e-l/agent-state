@@ -141,6 +141,8 @@ type Filed = {
   updated: number
   prompted?: number
   ranAt?: number
+  // When its main agent's last turn started: a question belongs to the turn that asked it.
+  turnAt?: number
   // What the toast of this session's last push said, when it was not sent.
   pushFailed?: string
 }
@@ -164,6 +166,8 @@ let prompted: number | undefined
 // When this session last took a state other than idle; a restart reads it back too.
 // A restart or a reload writes idle with a new `since`, so `since` cannot say it ran.
 let ranAt: number | undefined
+// When the main agent's last turn started; a restart reads it back too.
+let turnAt: number | undefined
 let fileQueue: Promise<unknown> = Promise.resolve()
 // When a resumed session last answered, as its SessionStart said, until its first
 // turn: the app restarts a session's process often (reopened, returned to), and
@@ -203,6 +207,7 @@ const toFile = ($: EngineInterface, line: string, state: string, note: string, i
       updated: now,
       prompted,
       ranAt,
+      turnAt,
       pushFailed,
     }
     const isWritten = await $.fs.write(file, JSON.stringify(next)).then(
@@ -630,13 +635,15 @@ const scanRecords = ($: EngineInterface, ids: Set<string>): Promise<void> => {
 // as needing them. Idle is the mod's own word that the session is not running. One
 // with background commands still running needs them too: the question waits on the
 // person whatever runs behind it, and a command that never ends, a dev server, would
-// hide it for good.
-// A session the person dismissed stays idle until its next message, activity or run.
+// hide it for good. One in the background, its main turn over and subagents still
+// running, needs them the same way.
+// A session the person dismissed stays as it was until its next message or turn.
+const canAsk = (state: string): boolean => state === IDLE || state === BACKGROUND
 const withQuestions = async ($: EngineInterface, rows: Row[]): Promise<Row[]> => {
-  await scanRecords($, new Set(rows.filter(row => row.filed.state === IDLE).map(row => row.id)))
+  await scanRecords($, new Set(rows.filter(row => canAsk(row.filed.state)).map(row => row.id)))
   const isDismissed = dismissedIn(await readDismissed($))
   return rows.map(row =>
-    row.filed.state === IDLE && records.get(row.id)?.isAsking === true && !isDismissed(row)
+    canAsk(row.filed.state) && records.get(row.id)?.isAsking === true && !isDismissed(row)
       ? { id: row.id, filed: { ...row.filed, state: NEEDS_YOU } }
       : row,
   )
@@ -810,14 +817,49 @@ const SOUND_FILES: readonly { file: string; label: string }[] = [
 ]
 const SOUNDS: readonly string[] = SOUND_FILES.map(sound => sound.file)
 
-// The sound picked, one choice for every session, kept in the plugin's store: a
-// file of SOUNDS, or anything else for none, the default.
+// The sound in force, one choice for every session, kept in the plugin's store: a
+// file of SOUNDS while 🔊 is on, or anything else for off, the default. The pick is
+// kept apart, so it is still there when 🔊 is turned on again.
 const SOUND = 'sound'
 const SILENT = 'off'
+const SOUND_PICK = 'soundPick'
+const SOUND_DEFAULT = SOUNDS[0] as string
 
 const readSound = async ($: EngineInterface): Promise<string | undefined> => {
   const saved: unknown = await $.store.get(SOUND).catch(() => undefined)
   return typeof saved === 'string' && SOUNDS.includes(saved) ? saved : undefined
+}
+
+// The sound the menu shows: the one in force, else the last picked, else the first.
+const readSoundPick = async ($: EngineInterface): Promise<string> => {
+  const saved: unknown = await $.store.get(SOUND_PICK).catch(() => undefined)
+  return (await readSound($)) ?? (typeof saved === 'string' && SOUNDS.includes(saved) ? saved : SOUND_DEFAULT)
+}
+
+// Current session: what the session the person last opened in the app does with the sound. It plays like any
+// other, the default; or is silent while the Mac was used in the last minute; or is silent whatever the Mac says.
+// The minute is its own, not Away after's: that one is 📱's.
+const SOUND_CURRENT = 'soundCurrent'
+const CURRENT_PLAYS = 'play'
+const CURRENT_AT_MAC = 'atMac'
+const CURRENT_SILENT = 'silent'
+const CURRENT_AT_MAC_SECS = 60
+const CURRENT_CHOICES = [
+  { value: CURRENT_PLAYS, label: 'Always play', says: 'The session you last opened rings like any other.' },
+  {
+    value: CURRENT_AT_MAC,
+    label: "Silent while I'm at the Mac",
+    says: 'No sound from the session you last opened while the Mac was used in the last minute.',
+  },
+  { value: CURRENT_SILENT, label: 'Always silent', says: "No sound from the session you last opened, even when you're away." },
+]
+const readSoundCurrent = async ($: EngineInterface): Promise<string> => {
+  const saved: unknown = await $.store.get(SOUND_CURRENT).catch(() => undefined)
+  return CURRENT_CHOICES.some(choice => choice.value === saved) ? (saved as string) : CURRENT_PLAYS
+}
+const chooseSoundCurrent = async ($: EngineInterface, value: string): Promise<void> => {
+  if (CURRENT_CHOICES.some(choice => choice.value === value)) await $.store.set(SOUND_CURRENT, value).catch(() => undefined)
+  $.ui.invalidate('ui.render')
 }
 
 // Plays a sound without waiting for it: a play resolves only once the clip ends, and
@@ -826,12 +868,24 @@ const play = ($: EngineInterface, sound: string): void => {
   void $.audio.play({ asset: `sounds/${sound}` }).catch(() => undefined)
 }
 
-// Keeps the pick, and plays it once so the person hears what they picked.
+// Keeps the pick, in force at once while 🔊 is on, and plays it once so the person hears what they picked.
 const chooseSound = async ($: EngineInterface, value: string): Promise<void> => {
-  const sound = SOUNDS.includes(value) ? value : undefined
-  await $.store.set(SOUND, sound ?? SILENT).catch(() => undefined)
+  if (!SOUNDS.includes(value)) return
+  const isOn = (await readSound($)) !== undefined
+  await $.store.set(SOUND_PICK, value).catch(() => undefined)
+  if (isOn) await $.store.set(SOUND, value).catch(() => undefined)
   $.ui.invalidate('ui.render')
-  if (sound !== undefined) play($, sound)
+  play($, value)
+}
+
+// 🔊 On/Off. On takes the last pick, the first sound where none was made, and plays it once.
+const pressSound = async ($: EngineInterface): Promise<void> => {
+  const isOn = (await readSound($)) !== undefined
+  const pick = await readSoundPick($)
+  await $.store.set(SOUND_PICK, pick).catch(() => undefined)
+  await $.store.set(SOUND, isOn ? SILENT : pick).catch(() => undefined)
+  $.ui.invalidate('ui.render')
+  if (!isOn) play($, pick)
 }
 
 // 📱 in the pane's Alerts: a push to the phone through ntfy.sh, one choice for every
@@ -922,12 +976,14 @@ const pressAway = async ($: EngineInterface): Promise<void> => {
   await $.store.set(AWAY, !(await readAway($))).catch(() => undefined)
   $.ui.invalidate('ui.render')
 }
-const isAtMac = async ($: EngineInterface): Promise<boolean> => {
+// Whether a key or the pointer was used in the last `secs` seconds; Away after's where none are given. Not at the
+// Mac when the time can't be read.
+const isAtMac = async ($: EngineInterface, secs?: number): Promise<boolean> => {
   const ran = await $.process
     .run(['/usr/sbin/ioreg', '-r', '-c', 'IOHIDSystem', '-d', '1', '-k', 'HIDIdleTime'], { timeoutMs: 5000 })
     .catch(() => undefined)
   const nanos = /"HIDIdleTime" = (\d+)/.exec(ran?.stdout ?? '')?.[1]
-  return nanos !== undefined && Number(nanos) / 1e9 < (await readAwaySecs($))
+  return nanos !== undefined && Number(nanos) / 1e9 < (secs ?? (await readAwaySecs($)))
 }
 
 // Priority: ntfy's own, 1 to 5, picked in the menu. 3 is ntfy's default and sends no header. ntfy.sh marks a push
@@ -962,25 +1018,29 @@ const choosePriority = async ($: EngineInterface, value: string): Promise<void> 
 // store for the one the person moves to; none of it is a topic until Save. Each
 // session also holds the last it wrote or read: a redraw must not put an older one
 // from the store back over what is being typed, so the later `at` of the two stands.
+// `isOpen` is 📱's menu and `isSoundOpen` 🔊's. One value holds both, and every write that opens one leaves the
+// other out, so only one is open at a time.
 type Menu = {
   at: number
   isOpen: boolean
   draft: string
   rolled?: string
   refused?: string
+  isSoundOpen?: boolean
 }
 const MENU = 'pushMenu'
 let menu: Menu | undefined
 
 const isMenu = (value: unknown): value is Menu => {
   if (typeof value !== 'object' || value === null) return false
-  const { at, isOpen, draft, rolled, refused } = value as Record<string, unknown>
+  const { at, isOpen, draft, rolled, refused, isSoundOpen } = value as Record<string, unknown>
   return (
     typeof at === 'number' &&
     typeof isOpen === 'boolean' &&
     typeof draft === 'string' &&
     (rolled === undefined || typeof rolled === 'string') &&
-    (refused === undefined || typeof refused === 'string')
+    (refused === undefined || typeof refused === 'string') &&
+    (isSoundOpen === undefined || typeof isSoundOpen === 'boolean')
   )
 }
 
@@ -1002,6 +1062,8 @@ const rolledOf = (now: Menu | undefined): { rolled?: string } =>
 
 const openMenu = async ($: EngineInterface): Promise<void> => {
   const now = await readMenu($)
+  // What 🔊's menu hid comes back as it was typed.
+  if (now !== undefined && !now.isOpen && now.draft !== '') return writeMenu($, { ...heldOf(now), isOpen: true })
   const topic = await readTopic($)
   if (topic !== undefined) return writeMenu($, { isOpen: true, draft: topic, ...rolledOf(now) })
   const rolled = now?.rolled ?? crypto.randomUUID()
@@ -1011,6 +1073,18 @@ const openMenu = async ($: EngineInterface): Promise<void> => {
 // Closing drops what was typed and keeps the topic last rolled.
 const closeMenu = async ($: EngineInterface): Promise<void> =>
   writeMenu($, { isOpen: false, draft: '', ...rolledOf(await readMenu($)) })
+
+// 🔊's menu. Opening it hides 📱's and keeps what was typed there, which 📱's ▼ shows again; only 📱's own ▲ drops
+// it. Closing 🔊's keeps it too.
+const heldOf = (now: Menu | undefined): Omit<Menu, 'at' | 'isOpen' | 'isSoundOpen'> => ({
+  draft: now?.draft ?? '',
+  ...rolledOf(now),
+  ...(now?.refused === undefined ? {} : { refused: now.refused }),
+})
+const openSoundMenu = async ($: EngineInterface): Promise<void> =>
+  writeMenu($, { ...heldOf(await readMenu($)), isOpen: false, isSoundOpen: true })
+const closeSoundMenu = async ($: EngineInterface): Promise<void> =>
+  writeMenu($, { ...heldOf(await readMenu($)), isOpen: false })
 
 // Cancel puts the saved topic back in the field, or the one last rolled where none is saved, and leaves the menu
 // open: the options below it are not the topic's to close.
@@ -1238,7 +1312,14 @@ const copyLink = async ($: EngineInterface, text: string, surface: RenderSurface
 // none were (design.md).
 const notify = async ($: EngineInterface): Promise<void> => {
   const sound = await readSound($)
-  if (sound !== undefined) play($, sound)
+  if (sound === undefined) return
+  const current = await readSoundCurrent($)
+  const isHeld =
+    current !== CURRENT_PLAYS &&
+    (await isInView($)) &&
+    (current === CURRENT_SILENT || (await isAtMac($, CURRENT_AT_MAC_SECS)))
+  if (isHeld) return logLine($, 'sound held: the session in view')
+  play($, sound)
 }
 
 // The texts of the app's records of this session, read past the pane's cache of
@@ -1258,6 +1339,59 @@ const ownRecords = async ($: EngineInterface): Promise<string[]> => {
     }
   }
   return texts
+}
+
+// When a record says the person last brought its session into view in the app (`lastFocusedAt`, observed: a time
+// in milliseconds, set as a session is switched to).
+const focusedAt = (text: string): number | undefined => {
+  try {
+    const at = (JSON.parse(text) as { lastFocusedAt?: unknown } | null)?.lastFocusedAt
+    return typeof at === 'number' ? at : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Whether this session is the one the person last brought into view: no other session's record names a later
+// time. A record is written as its time is set, so only those written since this session's time are read. The
+// app does not say whether the person is still looking, so the session stays in view while they are in another
+// app or away. Anything not readable counts as not in view, and the sound plays.
+const isInView = async ($: EngineInterface): Promise<boolean> => {
+  if (home === undefined || own === undefined) return false
+  const mine = Math.max(...(await ownRecords($)).map(text => focusedAt(text) ?? -Infinity))
+  if (!Number.isFinite(mine)) return false
+  // A record written since this session's time that can't be read, as one caught while the app writes it, may
+  // hold a later time: it counts as later. One that reads and holds no time does not.
+  const isLater = (text: unknown): boolean => {
+    if (typeof text !== 'string') return true
+    try {
+      const at = (JSON.parse(text) as { lastFocusedAt?: unknown } | null)?.lastFocusedAt
+      return typeof at === 'number' && at > mine
+    } catch {
+      return true
+    }
+  }
+  const list = (path: string) => $.fs.list(path).catch(() => undefined)
+  const root = `${home}/${RECORDS}`
+  const accounts = await list(root)
+  if (accounts === undefined) return false
+  for (const account of accounts) {
+    if (account.kind !== 'dir') continue
+    const orgs = await list(`${root}/${account.name}`)
+    if (orgs === undefined) return false
+    for (const org of orgs) {
+      if (org.kind !== 'dir') continue
+      const dir = `${root}/${account.name}/${org.name}`
+      const entries = await list(dir)
+      if (entries === undefined) return false
+      for (const entry of entries) {
+        if (entry.kind !== 'file' || !entry.name.endsWith('.json') || entry.name === `${own}.json`) continue
+        if (entry.mtimeMs < mine) continue
+        if (isLater(await $.fs.read(`${dir}/${entry.name}`).catch(() => undefined))) return false
+      }
+    }
+  }
+  return true
 }
 
 // Whether one of them says the session's last turn asked the person something.
@@ -1292,10 +1426,10 @@ let watched: string | undefined
 // Plays the sound once the main turn's answer leaves the session needing the person.
 // The app writes its record of the turn's question around the turn's end, so the
 // record is read at once and then a few times over ten seconds, while the session
-// stays idle, with or without commands in the background, and no later turn has ended.
+// stays idle or in the background, with or without commands or subagents behind it, and no later turn has ended.
 const watchQuestion = async ($: EngineInterface, turnId: string): Promise<void> => {
   watched = turnId
-  const isWaiting = (): boolean => watched === turnId && asked?.state === IDLE
+  const isWaiting = (): boolean => watched === turnId && asked !== undefined && canAsk(asked.state)
   const check = async (): Promise<boolean> => {
     if (!isWaiting() || !(await ownRecordAsks($)) || !isWaiting()) return false
     await notify($)
@@ -1401,13 +1535,17 @@ type Dismissed = Record<string, number>
 
 const readDismissed = ($: EngineInterface): Promise<Dismissed> => readStamps($, DISMISSED)
 
-// Whether a dismissal still holds: the session got no message, activity or run
-// since, so its next question needs the person again.
+// Whether a dismissal still holds. One dismissal is for one question, and a question is its turn's: it holds until
+// the person's next message or the main agent's next turn, whatever subagents or commands do behind it meanwhile.
+// A session whose file does not say when its turn started, one written before 0.8.0 or one the app lists with no
+// process, goes by its last message, activity or run.
+const askedAt = (row: Row): number =>
+  row.filed.turnAt === undefined ? lastOf(row) : Math.max(row.filed.prompted ?? 0, row.filed.turnAt)
 const dismissedIn =
   (dismissed: Dismissed): ((row: Row) => boolean) =>
   row => {
     const at = dismissed[row.id]
-    return at !== undefined && lastOf(row) <= at
+    return at !== undefined && askedAt(row) <= at
   }
 
 // Dismisses a session's 🙋 needs you, and forgets the dismissals that no longer hold,
@@ -1531,6 +1669,7 @@ const loadPrompted = async ($: EngineInterface): Promise<void> => {
   try {
     const saved = JSON.parse(text) as Filed
     if (prompted === undefined && typeof saved.prompted === 'number') prompted = saved.prompted
+    if (turnAt === undefined && typeof saved.turnAt === 'number') turnAt = saved.turnAt
     if (ranAt === undefined && typeof saved.ranAt === 'number') ranAt = saved.ranAt
   } catch {
     // No file yet, or one caught mid-write: the next message sets it.
@@ -1725,8 +1864,11 @@ export const register: Register = on => {
       )
     }
     const sound = await readSound($)
+    const soundPick = await readSoundPick($)
+    const soundCurrent = await readSoundCurrent($)
     const held = await readMenu($)
     const open = held?.isOpen === true ? held : undefined
+    const isSoundOpen = open === undefined && held?.isSoundOpen === true
     const topicLink = open === undefined ? '' : `${NTFY}/${open.draft.trim()}`
     const isDraftSaved = open !== undefined && open.draft.trim() === (await readTopic($))
     const isAway = await readAway($)
@@ -1739,8 +1881,8 @@ export const register: Register = on => {
     // control, so a border around both is its track, the one in force a primary chip
     // and the other plain, with none. Alerts sits at the far right of their line, there
     // with no session too: 📱, a button that is a primary chip while on, as the element
-    // table has no switch, ▼ for its menu, then the 🔊 menu. The elements hold no
-    // pop-up, so 📱's menu is a box under the line. The app's own header above takes
+    // table has no switch, ▼ for its menu, then 🔊 and its ▼, drawn the same. The elements hold no
+    // pop-up, so a menu is a box under the line, one open at a time. The app's own header above takes
     // nothing from a mod.
     return (
       <Box flexDirection="column" gap={1}>
@@ -1780,23 +1922,55 @@ export const register: Register = on => {
               plain
               onPress={() => void (open === undefined ? openMenu($) : closeMenu($))}
             />
-            {Select !== undefined && (
-              <Select
-                key="sound"
-                label="🔊"
-                options={[
-                  { value: SILENT, label: 'Off' },
-                  ...SOUND_FILES.map(({ file, label }) => ({
-                    value: file,
-                    label,
-                  })),
-                ]}
-                value={sound ?? SILENT}
-                onSelect={value => void chooseSound($, value)}
-              />
-            )}
+            <Button
+              key="sound"
+              label={sound === undefined ? '🔊 Off' : '🔊 On'}
+              variant="primary"
+              plain={sound === undefined ? true : undefined}
+              onPress={() => void pressSound($)}
+            />
+            <Button
+              key="sound:menu"
+              label={isSoundOpen ? '▲' : '▼'}
+              plain
+              onPress={() => void (isSoundOpen ? closeSoundMenu($) : openSoundMenu($))}
+            />
           </Box>
         </Box>
+        {isSoundOpen && (
+          <Box key="sound:box" flexDirection="column" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
+            <Text weight="medium">🔊 Sound</Text>
+            <Text dimColor size="footnote">
+              Plays when a session turns 🔐, ❓ or 🙋. Applied at once, for every session.
+            </Text>
+            {Select !== undefined ? (
+              <Select
+                key="sound:pick"
+                label="Sound"
+                options={SOUND_FILES.map(({ file, label }) => ({ value: file, label }))}
+                value={soundPick}
+                onSelect={value => void chooseSound($, value)}
+              />
+            ) : (
+              <Text size="footnote">{`Sound: ${SOUND_FILES.find(({ file }) => file === soundPick)?.label ?? ''}`}</Text>
+            )}
+            {Select !== undefined ? (
+              <Select
+                key="sound:current"
+                label="Current session"
+                options={CURRENT_CHOICES.map(({ value, label }) => ({ value, label }))}
+                value={soundCurrent}
+                onSelect={value => void chooseSoundCurrent($, value)}
+              />
+            ) : (
+              <Text size="footnote">{`Current session: ${CURRENT_CHOICES.find(choice => choice.value === soundCurrent)?.label ?? ''}`}</Text>
+            )}
+            {/* Under the dropdown, not beside it: beside, the row is wider than the menu and the text runs under it. */}
+            <Text dimColor size="footnote">
+              {CURRENT_CHOICES.find(choice => choice.value === soundCurrent)?.says ?? ''}
+            </Text>
+          </Box>
+        )}
         {open !== undefined && (
           <Box key="push:box" flexDirection="column" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
             <Text weight="medium">📱 Push to your phone</Text>
@@ -2004,6 +2178,7 @@ export const register: Register = on => {
     jobs = 0
     listed = ''
     hasPushedAsk = false
+    turnAt = Date.now()
     await emit($, `turn.start turn=${e.turnId}`, active())
     return next(e)
   })

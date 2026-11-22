@@ -54,8 +54,10 @@ const engine = (
     files.set(e.path, e.text)
     return { value: undefined }
   })
+  // A file the map names as `fail:<path>` fails to read.
   on('fs.read', (_$, e) => {
     read.push(e.path)
+    if (files.has(`fail:${e.path}`)) throw new Error('EIO')
     return { value: files.get(e.path) ?? '' }
   })
   on('fs.exists', (_$, e) => ({ value: [...files.keys()].some(path => path === e.path || path.startsWith(`${e.path}/`)) }))
@@ -219,6 +221,8 @@ test("the pane lists the sessions the app lists, by the app's titles, what waits
     'Projects',
     '📱 Off',
     '▼',
+    '🔊 Off',
+    '▼',
     'Asks',
     'This one',
     'App title',
@@ -253,7 +257,7 @@ test("a press on a session's row opens it in the app", async ($, on) => {
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', 'project'])
+  expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', '🔊 Off', '▼', 'project'])
   opened.length = 0
   await ui.press({ key: 'local_b' })
   expect(opened).toEqual([['open', 'claude://claude.ai/epitaxy/local_b']])
@@ -318,7 +322,7 @@ test('the pane lists sessions under their project, the projects from Z to A and 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const headings = await ui.findAll({ type: 'Text', text: /^(agent-state|hookdrills|cupboardian|This computer)$/ })
   expect(headings.map(heading => heading.text)).toEqual(['hookdrills', 'cupboardian', 'agent-state', 'This computer'])
-  expect((await ui.findAll({ type: 'Button', text: /^[^↑↓]+$/ })).length).toBe(9)
+  expect((await ui.findAll({ type: 'Button', text: /^[^↑↓]+$/ })).length).toBe(11)
 
   // Down on the first heading, then up on the last: both moves are saved for every pane.
   await ui.press({ key: 'down:hookdrills' })
@@ -428,7 +432,7 @@ test('how long a state lasted reads in words, then as when it began past a day; 
     expect.stringMatching(/^ · [A-Z][a-z]{2} \d+ \d+:\d\d$/),
   ])
   // The session's own name has a pointer; its rewritten file names no title.
-  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', '› project', '90', '180', '2880'])
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', '🔊 Off', '▼', '› project', '90', '180', '2880'])
   await ui.unmount()
 })
 
@@ -447,7 +451,7 @@ test("a session's file is read again only once its time or size changes, or its 
   const draw = async (): Promise<{ names: string[]; reads: string[] }> => {
     read.length = 0
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const names = (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(4)
+    const names = (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(6)
     await ui.unmount()
     return { names, reads: read.filter(path => path.startsWith(`${folder}/`)).map(path => path.slice(folder.length + 1)) }
   }
@@ -583,7 +587,7 @@ test('nothing is deleted without a fetched list: from the saved one, or after a 
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.findAll({ type: 'Button' })).map(row => row.text).slice(4)).toEqual(['a'])
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text).slice(6)).toEqual(['a'])
   await ui.unmount()
   expect(removed(ran)).toEqual([])
 })
@@ -663,6 +667,8 @@ test("an idle session whose last turn asked the person something needs them, as 
     'Projects',
     '📱 Off',
     '▼',
+    '🔊 Off',
+    '▼',
     'asked',
     'Dismiss',
     'summary',
@@ -712,7 +718,7 @@ test("an idle session whose last turn asked the person something needs them, as 
   files.set(`${records}/local_torn.json`, record({ turnWrapUp: asked }))
   files.set('store:isByTime', 'false')
   const answered = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await answered.findAll({ type: 'Button', text: /^(?!Dismiss$)/ })).map(one => one.text).slice(4, 7)).toEqual([
+  expect((await answered.findAll({ type: 'Button', text: /^(?!Dismiss$)/ })).map(one => one.text).slice(6, 9)).toEqual([
     'summary',
     'torn',
     'busy',
@@ -726,7 +732,7 @@ test("an idle session whose last turn asked the person something needs them, as 
   files.set(`mtime:${records}/local_torn.json`, '3')
   files.delete(`${records}/local_summary.json`)
   const torn = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await torn.findAll({ type: 'Button' })).map(one => one.text)[4]).toBe('torn')
+  expect((await torn.findAll({ type: 'Button' })).map(one => one.text)[6]).toBe('torn')
   expect((await torn.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(2)
   await torn.unmount()
 
@@ -860,7 +866,7 @@ test("switching back to a session draws the list the session on screen saved, no
   const clock = mock.clock(on)
   const attach = () => $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
   const names = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ text: string }[]> }) =>
-    (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(4)
+    (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(6)
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   await attach()
@@ -973,7 +979,7 @@ test('a restarted session draws from the saved list before its fetch ends, and s
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   // The fetch is held, yet the pane draws.
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', 'Saved title'])
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', '🔊 Off', '▼', 'Saved title'])
   await ui.unmount()
 
   release()
@@ -1451,7 +1457,7 @@ test('a message and a run are filed with the session, and a restarted process ke
   expect(promptedIn()).toBe(sent)
 })
 
-test('Alerts sits at the far right of the view buttons: 📱 and its ▼, then the 🔊 menu, which offers Off and each sound by a short name, and plays a pick', async ($, on) => {
+test('Alerts sits at the far right of the view buttons: 📱 and its ▼, then 🔊 and its ▼; 🔊 turns the sound on with the first one, and its menu picks another and plays a pick', async ($, on) => {
   const files = new Map([
     [
       '/Users/me/.claude/agent-state/local_a.json',
@@ -1464,14 +1470,38 @@ test('Alerts sits at the far right of the view buttons: 📱 and its ▼, then t
     played.push(e.clip)
     return { value: undefined }
   })
+  const PING = '266742__n_audioman__ping12.m4a'
+  const PLUNK = '719220__metrolynn__plunk.m4a'
+  const UP = '545373__stwime__up3.mp3'
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const menu = await ui.find({ type: 'Select', key: 'sound' })
-  expect(menu?.props.label).toBe('🔊')
-  expect(menu?.props.value).toBe('off')
-  expect((menu?.props.options as { label: string }[]).map(option => option.label)).toEqual([
-    'Off',
+  const button = async (key: string) => (await ui.find({ type: 'Button', key }))?.props
+  const pick = async () => (await ui.find({ type: 'Select', key: 'sound:pick' }))?.props
+  // One line: the view buttons' track first, Alerts last, pushed apart.
+  type Drawn = { type: string; props: Record<string, unknown>; children: Drawn[] }
+  const header = ((await ui.drawn()) as unknown as Drawn).children[0] as Drawn
+  expect(header.props.justifyContent).toBe('space-between')
+  expect(header.children.map(child => child.type)).toEqual(['Box', 'Box'])
+  expect(header.children[1]?.children.map(child => child.type)).toEqual(['Text', 'Button', 'Button', 'Button', 'Button'])
+  expect((await ui.find({ type: 'Text', text: 'Alerts' }))?.props.dimColor).toBe(true)
+
+  // Off, the default, with its menu closed.
+  expect(await button('sound')).toMatchObject({ label: '🔊 Off', plain: true })
+  expect(await button('sound:menu')).toMatchObject({ label: '▼' })
+  expect(await pick()).toBeUndefined()
+
+  // On takes the first sound, and plays it once.
+  await ui.press({ key: 'sound' })
+  expect(await button('sound')).toMatchObject({ label: '🔊 On', variant: 'primary' })
+  expect(files.get('store:sound')).toBe(JSON.stringify(PING))
+  expect(played).toEqual([{ asset: `sounds/${PING}` }])
+
+  // The menu offers each sound by a short name, with no Off: the button is that.
+  await ui.press({ key: 'sound:menu' })
+  expect(await button('sound:menu')).toMatchObject({ label: '▲' })
+  expect((await pick())?.value).toBe(PING)
+  expect(((await pick())?.options as { label: string }[]).map(option => option.label)).toEqual([
     'ping',
     'short-ping',
     'bell-ting-1',
@@ -1482,22 +1512,82 @@ test('Alerts sits at the far right of the view buttons: 📱 and its ▼, then t
     'notification',
     'dingaling',
   ])
-  // One line: the view buttons' track first, Alerts last, pushed apart.
-  type Drawn = { type: string; props: Record<string, unknown>; children: Drawn[] }
-  const header = ((await ui.drawn()) as unknown as Drawn).children[0] as Drawn
-  expect(header.props.justifyContent).toBe('space-between')
-  expect(header.children.map(child => child.type)).toEqual(['Box', 'Box'])
-  expect(header.children[1]?.children.map(child => child.type)).toEqual(['Text', 'Button', 'Button', 'Select'])
-  expect((await ui.find({ type: 'Text', text: 'Alerts' }))?.props.dimColor).toBe(true)
+  await ui.select({ key: 'sound:pick', value: PLUNK })
+  expect(played).toEqual([{ asset: `sounds/${PING}` }, { asset: `sounds/${PLUNK}` }])
+  expect(files.get('store:sound')).toBe(JSON.stringify(PLUNK))
+  expect((await pick())?.value).toBe(PLUNK)
 
-  await ui.select({ key: 'sound', value: '719220__metrolynn__plunk.m4a' })
-  expect(played).toEqual([{ asset: 'sounds/719220__metrolynn__plunk.m4a' }])
-  expect(files.get('store:sound')).toBe(JSON.stringify('719220__metrolynn__plunk.m4a'))
-  expect((await ui.find({ type: 'Select', key: 'sound' }))?.props.value).toBe('719220__metrolynn__plunk.m4a')
+  // Off plays nothing and keeps the pick. A pick made while off plays once, and is the one On takes.
+  await ui.press({ key: 'sound' })
+  expect(await button('sound')).toMatchObject({ label: '🔊 Off', plain: true })
+  expect(files.get('store:sound')).toBe('"off"')
+  expect(played).toHaveLength(2)
+  expect((await pick())?.value).toBe(PLUNK)
+  await ui.select({ key: 'sound:pick', value: UP })
+  expect(played).toHaveLength(3)
+  expect(files.get('store:sound')).toBe('"off"')
+  await ui.press({ key: 'sound' })
+  expect(files.get('store:sound')).toBe(JSON.stringify(UP))
+  expect(played).toHaveLength(4)
+  // What is no sound changes nothing.
+  await ui.select({ key: 'sound:pick', value: 'off' }).catch(() => undefined)
+  expect(files.get('store:sound')).toBe(JSON.stringify(UP))
 
-  await ui.select({ key: 'sound', value: 'off' })
-  expect(played).toHaveLength(1)
-  expect((await ui.find({ type: 'Select', key: 'sound' }))?.props.value).toBe('off')
+  // ▲ closes the menu.
+  await ui.press({ key: 'sound:menu' })
+  expect(await pick()).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a sound kept by an earlier version shows 🔊 On, and its menu shows that sound', async ($, on) => {
+  const files = new Map([['store:sound', JSON.stringify('545373__stwime__up3.mp3')]])
+  engine(on, { HOME: '/Users/me' }, files)
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Button', key: 'sound' }))?.props.label).toBe('🔊 On')
+  await ui.press({ key: 'sound:menu' })
+  expect((await ui.find({ type: 'Select', key: 'sound:pick' }))?.props.value).toBe('545373__stwime__up3.mp3')
+  await ui.unmount()
+})
+
+test('one menu is open at a time: opening 🔊 hides 📱 with what was typed there kept, and opening 📱 closes 🔊', async ($, on) => {
+  const files = new Map<string, string>()
+  engine(on, { HOME: '/Users/me' }, files)
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const label = async (key: string) => (await ui.find({ type: 'Button', key }))?.text
+  const boxes = async () => [
+    (await ui.find({ type: 'Input', key: 'push:topic' })) !== undefined,
+    (await ui.find({ type: 'Select', key: 'sound:pick' })) !== undefined,
+  ]
+  expect(await boxes()).toEqual([false, false])
+  await ui.press({ key: 'push:menu' })
+  expect(await boxes()).toEqual([true, false])
+  await ui.press({ key: 'sound:menu' })
+  expect(await boxes()).toEqual([false, true])
+  expect([await label('push:menu'), await label('sound:menu')]).toEqual(['▼', '▲'])
+  await ui.press({ key: 'push:menu' })
+  expect(await boxes()).toEqual([true, false])
+  expect([await label('push:menu'), await label('sound:menu')]).toEqual(['▲', '▼'])
+
+  // A topic typed and not saved is still there after 🔊's menu was opened over it, and after that one was closed.
+  const typed = async () => (await ui.find({ type: 'Input', key: 'push:topic' }))?.props.value
+  await ui.input({ key: 'push:topic', text: 'a_topic_being_typed_01', kind: 'change' })
+  await ui.press({ key: 'sound:menu' })
+  expect(await boxes()).toEqual([false, true])
+  await ui.press({ key: 'push:menu' })
+  expect(await typed()).toBe('a_topic_being_typed_01')
+  await ui.press({ key: 'sound:menu' })
+  await ui.press({ key: 'sound:menu' })
+  expect(await boxes()).toEqual([false, false])
+  await ui.press({ key: 'push:menu' })
+  expect(await typed()).toBe('a_topic_being_typed_01')
+  expect(files.has('store:pushTopic')).toBe(false)
+  // 📱's own ▲ drops it.
+  await ui.press({ key: 'push:menu' })
+  expect(await boxes()).toEqual([false, false])
+  await ui.press({ key: 'push:menu' })
+  expect(await typed()).not.toBe('a_topic_being_typed_01')
   await ui.unmount()
 })
 
@@ -1565,6 +1655,100 @@ test('a session with no person at the prompt plays the sound too', async ($, on)
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   expect(played).toEqual([{ asset: 'sounds/545373__stwime__up3.mp3' }])
+})
+
+test('Current session: the session last opened plays like any other, is silent while the Mac is in use, or is always silent, as picked', async ($, on) => {
+  const UP = { asset: 'sounds/545373__stwime__up3.mp3' }
+  const files = new Map([['store:sound', JSON.stringify('545373__stwime__up3.mp3')]])
+  const played = soundEngine(on, files, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' })
+  const OTHER = RECORD.replace('local_1.json', 'local_2.json')
+  const IOREG = 'run:/usr/sbin/ioreg'
+  const since = (seconds: number): string => `    | |   "HIDIdleTime" = ${seconds * 1e9}\n`
+  const focus = (path: string, at: number): void => {
+    files.set(path, JSON.stringify({ lastFocusedAt: at }))
+    files.set(`mtime:${path}`, String(at))
+  }
+  let turn = 0
+  const ask = async (): Promise<number> => {
+    turn += 1
+    await $.turn.start({ text: 'hi', turnId: `t${turn}` })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+    return played.length
+  }
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'sound:menu' })
+  const choice = async () => (await ui.find({ type: 'Select', key: 'sound:current' }))?.props
+  const says = async () => (await ui.find({ type: 'Text', text: /the session you last opened/i }))?.text
+
+  // Always play, the default: the session in view plays, with the Mac in use.
+  focus(RECORD, 2000)
+  focus(OTHER, 1000)
+  files.set(IOREG, since(5))
+  expect(await choice()).toMatchObject({ label: 'Current session', value: 'play' })
+  expect(((await choice())?.options as { label: string }[]).map(option => option.label)).toEqual([
+    'Always play',
+    "Silent while I'm at the Mac",
+    'Always silent',
+  ])
+  expect(await says()).toBe('The session you last opened rings like any other.')
+  expect(await ask()).toBe(1)
+
+  // Silent while I'm at the Mac: held with the Mac used in the last minute, played past it or when that can't be read.
+  await ui.select({ key: 'sound:current', value: 'atMac' })
+  expect(files.get('store:soundCurrent')).toBe('"atMac"')
+  expect(await says()).toBe('No sound from the session you last opened while the Mac was used in the last minute.')
+  expect(await ask()).toBe(1)
+  files.set(IOREG, since(90))
+  expect(await ask()).toBe(2)
+  files.delete(IOREG)
+  expect(await ask()).toBe(3)
+
+  // Always silent: held whatever the Mac says.
+  await ui.select({ key: 'sound:current', value: 'silent' })
+  expect(await says()).toBe("No sound from the session you last opened, even when you're away.")
+  expect(await ask()).toBe(3)
+  // Another session's record written since that names no time: still held. One cut off as the app writes it may
+  // name a later time: this one plays.
+  files.set(OTHER, '{}')
+  files.set(`mtime:${OTHER}`, '2500')
+  expect(await ask()).toBe(3)
+  files.set(OTHER, '{"lastFocusedAt":')
+  expect(await ask()).toBe(4)
+  // So does one that fails to read.
+  files.set(OTHER, '{}')
+  files.set(`fail:${OTHER}`, '')
+  expect(await ask()).toBe(5)
+  files.delete(`fail:${OTHER}`)
+  // A second account's records count too: held while they name no later time, played when its folder or its
+  // organization's fails to list.
+  const ELSEWHERE = RECORD.replace('/account/org/local_1.json', '/other')
+  files.set(`${ELSEWHERE}/org/local_9.json`, '{}')
+  expect(await ask()).toBe(5)
+  files.set(`fail:${ELSEWHERE}`, '')
+  expect(await ask()).toBe(6)
+  files.delete(`fail:${ELSEWHERE}`)
+  files.set(`fail:${ELSEWHERE}/org`, '')
+  expect(await ask()).toBe(7)
+  files.delete(`fail:${ELSEWHERE}/org`)
+  expect(await ask()).toBe(7)
+  // Another session opened since: this one plays.
+  focus(OTHER, 3000)
+  expect(await ask()).toBe(8)
+  // A record that does not say when it was opened, or none: plays.
+  files.set(RECORD, '{}')
+  expect(await ask()).toBe(9)
+  files.delete(RECORD)
+  expect(await ask()).toBe(10)
+  expect(played).toEqual(Array.from({ length: 10 }, () => UP))
+
+  // A pick in the menu plays whatever this says, and what is no choice changes nothing.
+  focus(RECORD, 4000)
+  await ui.select({ key: 'sound:pick', value: '719220__metrolynn__plunk.m4a' })
+  expect(played).toHaveLength(11)
+  await ui.select({ key: 'sound:current', value: 'never' }).catch(() => undefined)
+  expect(files.get('store:soundCurrent')).toBe('"silent"')
+  await ui.unmount()
 })
 
 test('with the sound off, nothing plays', async ($, on) => {
@@ -2134,9 +2318,25 @@ test('a turn that ends asking the person something with a command still in the b
   expect(played).toHaveLength(1)
 })
 
-test('a turn that ends asking the person something with a subagent still running pushes 🙋 once; one that asks nothing, or was interrupted, sends nothing', async ($, on) => {
+test('a turn that ends asking the person something with a subagent still running pushes 🙋 once, plays the sound and shows 🙋 with Dismiss; one that asks nothing, or was interrupted, sends nothing', async ($, on) => {
   const files = pushOn()
+  files.set('store:sound', JSON.stringify('545373__stwime__up3.mp3'))
   const { posts, clock } = pushEngine(on, files)
+  const played: unknown[] = []
+  on('audio.play', (_$, e) => {
+    played.push(e)
+    return { value: undefined }
+  })
+  const shown = async (): Promise<{ states: string[]; canDismiss: boolean; count: string | undefined }> => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const states = (await ui.findAll({ type: 'Text', text: /^(🙋 needs you|🧵 background|⚙️ working|💤 idle)/ })).map(one => one.text)
+    const canDismiss = (await ui.find({ type: 'Button', key: 'dismiss:local_1' })) !== undefined
+    await ui.unmount()
+    const button = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
+    const count = (await button.find({ type: 'Button' }))?.text
+    await button.unmount()
+    return { states, canDismiss, count }
+  }
   let status: 'running' | 'completed' = 'running'
   on('agent.list', () => {
     return { value: [{ id: 'a1', description: 'maker', type: 'general-purpose', status }] }
@@ -2153,22 +2353,53 @@ test('a turn that ends asking the person something with a subagent still running
   await end('t1')
   expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '🧵 background' })
   expect(posts).toEqual([])
+  expect(played).toEqual([])
+  expect(await shown()).toEqual({ states: ['🧵 background'], canDismiss: false, count: 'Sessions · 🧵1' })
 
-  // An interrupted turn sends nothing, whatever the record holds.
+  // An interrupted turn sends and plays nothing, whatever the record holds.
   files.set(RECORD, ASKED)
   await end('t2', true)
   expect(posts).toEqual([])
+  expect(played).toEqual([])
 
-  // Asked: 🙋 goes out with the subagent still running.
+  // Asked: 🙋 goes out and the sound plays once, with the subagent still running, and the pane and the button
+  // show 🙋.
   await end('t3')
   expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '🧵 background' })
   expect(posts.map(post => post.body)).toEqual(['🙋 project'])
+  expect(played).toHaveLength(1)
+  expect(await shown()).toEqual({ states: ['🙋 needs you'], canDismiss: true, count: 'Sessions · 🙋1' })
 
-  // A rest with no new turn, here a /clear, reads the same record, and the same question is not pushed again.
+  // Dismiss puts it back to 🧵, and the subagent's own work does not undo that.
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pane.press({ key: 'dismiss:local_1' })
+  await pane.unmount()
+  expect(await shown()).toEqual({ states: ['🧵 background'], canDismiss: false, count: 'Sessions · 🧵1' })
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'c1', agentId: 'a1' } as never)
+  await clock.advance(5_000)
+  expect(await shown()).toEqual({ states: ['🧵 background'], canDismiss: false, count: 'Sessions · 🧵1' })
+  expect(played).toHaveLength(1)
+
+  // The next turn is at work, and its own question shows again.
+  await $.turn.start({ text: 'go on', turnId: 't4' })
+  expect((await shown()).states).toEqual(['⚙️ working'])
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't4', reason: 'answer' })
+  await clock.advance(10_000)
+  expect(await shown()).toEqual({ states: ['🙋 needs you'], canDismiss: true, count: 'Sessions · 🙋1' })
+  expect(posts.map(post => post.body)).toEqual(['🙋 project', '🙋 project'])
+  expect(played).toHaveLength(2)
+
+  // A rest with no new turn, here a /clear, reads the same record, and the same question is not pushed again. One
+  // dismissal is for one question: dismissed over 🧵, it stays dismissed once the session is idle.
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await again.press({ key: 'dismiss:local_1' })
+  await again.unmount()
   await $.session.end({ reason: 'clear', sessionId: 'own-id', resume: { id: 'own-id' } })
   await clock.advance(10_000)
   expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '💤 idle', note: '' })
-  expect(posts.map(post => post.body)).toEqual(['🙋 project'])
+  expect(await shown()).toEqual({ states: ['💤 idle'], canDismiss: false, count: 'Sessions · 💤1' })
+  expect(played).toHaveLength(2)
+  expect(posts.map(post => post.body)).toEqual(['🙋 project', '🙋 project'])
 })
 
 test('with 📱 on, a session pushes as it leaves work: the state icon and its name, kept nowhere, with the phone link when it has Remote Control', async ($, on) => {
