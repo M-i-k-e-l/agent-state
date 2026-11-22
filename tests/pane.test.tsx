@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 const RAN = { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
 
@@ -37,9 +38,11 @@ const engine = (
   read: string[] = [],
 ): void => {
   drawModes(on)
+  // A run answers with what the map holds under `run:<program>`, else fails.
   on('process.run', (_$, e) => {
     ran.push(e.argv)
-    return { value: { ...RAN, exitCode: 2 } }
+    const printed = files.get(`run:${e.argv[0] ?? ''}`)
+    return { value: printed === undefined ? { ...RAN, exitCode: 2 } : { ...RAN, exitCode: 0, stdout: printed } }
   })
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('session.cwd', () => ({ value: '/Users/me/project' }))
@@ -214,6 +217,8 @@ test("the pane lists the sessions the app lists, by the app's titles, what waits
   expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual([
     'Time',
     'Projects',
+    '📱 Off',
+    '▼',
     'Asks',
     'This one',
     'App title',
@@ -248,7 +253,7 @@ test("a press on a session's row opens it in the app", async ($, on) => {
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual(['Time', 'Projects', 'project'])
+  expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', 'project'])
   opened.length = 0
   await ui.press({ key: 'local_b' })
   expect(opened).toEqual([['open', 'claude://claude.ai/epitaxy/local_b']])
@@ -313,7 +318,7 @@ test('the pane lists sessions under their project, the projects from Z to A and 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const headings = await ui.findAll({ type: 'Text', text: /^(agent-state|hookdrills|cupboardian|This computer)$/ })
   expect(headings.map(heading => heading.text)).toEqual(['hookdrills', 'cupboardian', 'agent-state', 'This computer'])
-  expect((await ui.findAll({ type: 'Button', text: /^[^↑↓]+$/ })).length).toBe(7)
+  expect((await ui.findAll({ type: 'Button', text: /^[^↑↓]+$/ })).length).toBe(9)
 
   // Down on the first heading, then up on the last: both moves are saved for every pane.
   await ui.press({ key: 'down:hookdrills' })
@@ -423,7 +428,7 @@ test('how long a state lasted reads in words, then as when it began past a day; 
     expect.stringMatching(/^ · [A-Z][a-z]{2} \d+ \d+:\d\d$/),
   ])
   // The session's own name has a pointer; its rewritten file names no title.
-  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', '› project', '90', '180', '2880'])
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', '› project', '90', '180', '2880'])
   await ui.unmount()
 })
 
@@ -442,7 +447,7 @@ test("a session's file is read again only once its time or size changes, or its 
   const draw = async (): Promise<{ names: string[]; reads: string[] }> => {
     read.length = 0
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const names = (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(2)
+    const names = (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(4)
     await ui.unmount()
     return { names, reads: read.filter(path => path.startsWith(`${folder}/`)).map(path => path.slice(folder.length + 1)) }
   }
@@ -578,7 +583,7 @@ test('nothing is deleted without a fetched list: from the saved one, or after a 
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.findAll({ type: 'Button' })).map(row => row.text).slice(2)).toEqual(['a'])
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text).slice(4)).toEqual(['a'])
   await ui.unmount()
   expect(removed(ran)).toEqual([])
 })
@@ -642,8 +647,8 @@ test("an idle session whose last turn asked the person something needs them, as 
     [`${records}/local_torn.json`, '{"turnWrapUp":'],
     [`mtime:${records}/local_torn.json`, '1'],
     [`${folder}/local_none.json`, filed('💤 idle', 'none', 8)],
-    // Idle with a background command still running: the app counts it as running,
-    // and the pane lists it with what is at work.
+    // Idle with a background command still running, its turn having asked: the question
+    // waits on the person whatever runs behind it, so it needs them too.
     [`${folder}/local_busy.json`, JSON.stringify({ ...JSON.parse(filed('💤 idle', 'busy', 9)), note: '⏳1' })],
     [`${records}/local_busy.json`, record({ turnWrapUp: asked })],
   ])
@@ -656,12 +661,15 @@ test("an idle session whose last turn asked the person something needs them, as 
   expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual([
     'Time',
     'Projects',
+    '📱 Off',
+    '▼',
     'asked',
     'Dismiss',
     'summary',
     'Dismiss',
-    'working',
     'busy',
+    'Dismiss',
+    'working',
     'told',
     'failed',
     'stale',
@@ -672,8 +680,8 @@ test("an idle session whose last turn asked the person something needs them, as 
   expect(states.map(one => one.text)).toEqual([
     '🙋 needs you',
     '🙋 needs you',
+    '🙋 needs you',
     '⚙️ working',
-    '💤 idle',
     '💤 idle',
     '💤 idle',
     '💤 idle',
@@ -684,7 +692,7 @@ test("an idle session whose last turn asked the person something needs them, as 
   await ui.unmount()
 
   const button = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
-  expect((await button.find({ type: 'Button' }))?.text).toBe('Sessions · 🙋2 ⚙️1 ⏳1 💤5')
+  expect((await button.find({ type: 'Button' }))?.text).toBe('Sessions · 🙋3 ⚙️1 💤5')
   await button.unmount()
 
   // By time, it is in Recent, with Pin and no → Today, as a dialog's session is.
@@ -704,12 +712,12 @@ test("an idle session whose last turn asked the person something needs them, as 
   files.set(`${records}/local_torn.json`, record({ turnWrapUp: asked }))
   files.set('store:isByTime', 'false')
   const answered = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await answered.findAll({ type: 'Button', text: /^(?!Dismiss$)/ })).map(one => one.text).slice(2, 5)).toEqual([
+  expect((await answered.findAll({ type: 'Button', text: /^(?!Dismiss$)/ })).map(one => one.text).slice(4, 7)).toEqual([
     'summary',
     'torn',
-    'working',
+    'busy',
   ])
-  expect((await answered.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(2)
+  expect((await answered.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(3)
   await answered.unmount()
 
   // A read caught mid-write keeps the question the last read found. A record gone
@@ -718,14 +726,14 @@ test("an idle session whose last turn asked the person something needs them, as 
   files.set(`mtime:${records}/local_torn.json`, '3')
   files.delete(`${records}/local_summary.json`)
   const torn = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await torn.findAll({ type: 'Button' })).map(one => one.text)[2]).toBe('torn')
-  expect((await torn.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(1)
+  expect((await torn.findAll({ type: 'Button' })).map(one => one.text)[4]).toBe('torn')
+  expect((await torn.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(2)
   await torn.unmount()
 
   // A folder that is there but fails to list once keeps what its sessions said.
   files.set(`fail:${records}`, '')
   const failed = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await failed.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(1)
+  expect((await failed.findAll({ type: 'Text', text: '🙋 needs you' })).length).toBe(2)
   await failed.unmount()
   // Gone for good: no question is left.
   files.delete(`fail:${records}`)
@@ -852,7 +860,7 @@ test("switching back to a session draws the list the session on screen saved, no
   const clock = mock.clock(on)
   const attach = () => $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
   const names = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ text: string }[]> }) =>
-    (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(2)
+    (await ui.findAll({ type: 'Button' })).map(row => row.text).slice(4)
 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   await attach()
@@ -965,7 +973,7 @@ test('a restarted session draws from the saved list before its fetch ends, and s
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   // The fetch is held, yet the pane draws.
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', 'Saved title'])
+  expect((await ui.findAll({ type: 'Button' })).map(row => row.text)).toEqual(['Time', 'Projects', '📱 Off', '▼', 'Saved title'])
   await ui.unmount()
 
   release()
@@ -1443,7 +1451,7 @@ test('a message and a run are filed with the session, and a restarted process ke
   expect(promptedIn()).toBe(sent)
 })
 
-test('the 🔔 Alert menu sits at the far right of the view buttons, offers Off and each sound by a short name, and plays a pick', async ($, on) => {
+test('Alerts sits at the far right of the view buttons: 📱 and its ▼, then the 🔊 menu, which offers Off and each sound by a short name, and plays a pick', async ($, on) => {
   const files = new Map([
     [
       '/Users/me/.claude/agent-state/local_a.json',
@@ -1460,7 +1468,7 @@ test('the 🔔 Alert menu sits at the far right of the view buttons, offers Off 
   await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const menu = await ui.find({ type: 'Select', key: 'sound' })
-  expect(menu?.props.label).toBe('🔔 Alert')
+  expect(menu?.props.label).toBe('🔊')
   expect(menu?.props.value).toBe('off')
   expect((menu?.props.options as { label: string }[]).map(option => option.label)).toEqual([
     'Off',
@@ -1474,10 +1482,13 @@ test('the 🔔 Alert menu sits at the far right of the view buttons, offers Off 
     'notification',
     'dingaling',
   ])
-  // One line: the view buttons' track first, the menu last, pushed apart.
-  const header = ((await ui.drawn()) as unknown as { children: unknown[] }).children[0] as { props: Record<string, unknown>; children: { type: string }[] }
+  // One line: the view buttons' track first, Alerts last, pushed apart.
+  type Drawn = { type: string; props: Record<string, unknown>; children: Drawn[] }
+  const header = ((await ui.drawn()) as unknown as Drawn).children[0] as Drawn
   expect(header.props.justifyContent).toBe('space-between')
-  expect(header.children.map(child => child.type)).toEqual(['Box', 'Select'])
+  expect(header.children.map(child => child.type)).toEqual(['Box', 'Box'])
+  expect(header.children[1]?.children.map(child => child.type)).toEqual(['Text', 'Button', 'Button', 'Select'])
+  expect((await ui.find({ type: 'Text', text: 'Alerts' }))?.props.dimColor).toBe(true)
 
   await ui.select({ key: 'sound', value: '719220__metrolynn__plunk.m4a' })
   expect(played).toEqual([{ asset: 'sounds/719220__metrolynn__plunk.m4a' }])
@@ -1615,6 +1626,37 @@ test("an answer's late question plays while the session waits, and not once a ne
   files.set(RECORD, ASKED)
   await clock.advance(10_000)
   expect(played).toHaveLength(1)
+})
+
+test('Dismiss on a session that needs the person with a command in the background shows it ⏳ again', async ($, on) => {
+  const now = Date.now()
+  const at = now - 60_000
+  const files = new Map([
+    [
+      '/Users/me/.claude/agent-state/local_a.json',
+      JSON.stringify({ state: '💤 idle', note: '⏳1', since: at, title: 'a', cwd: '/x', updated: at, prompted: at, ranAt: at }),
+    ],
+    [
+      '/Users/me/Library/Application Support/Claude/claude-code-sessions/account/org/local_a.json',
+      JSON.stringify({ turnWrapUp: { description: 'Done.', needsUser: 'Ship it?' } }),
+    ],
+  ])
+  engine(on, { HOME: '/Users/me' }, files)
+  const chip = async (): Promise<string | undefined> => {
+    const button = await $.ui.mount({ plugin: 'agent-state', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
+    const text = (await button.find({ type: 'Button' }))?.text
+    await button.unmount()
+    return text
+  }
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  expect(await chip()).toBe('Sessions · 🙋1')
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pane.press({ key: 'dismiss:local_a' })
+  expect(await pane.findAll({ type: 'Text', text: '🙋 needs you' })).toHaveLength(0)
+  expect(await pane.find({ type: 'Button', text: 'Dismiss' })).toBeUndefined()
+  await pane.unmount()
+  expect(await chip()).toBe('Sessions · ⏳1')
 })
 
 test("Dismiss on a session that needs the person shows it idle in both views, until it gets a message or runs", async ($, on) => {
@@ -1813,4 +1855,684 @@ test('idle with a background command counts as at work: in Recent, green, Pin an
   await stale.press({ key: 'today:local_latest' })
   expect(files.get('store:movedToToday')).toBe(moves)
   await stale.unmount()
+})
+
+// 📱 and its menu, alone: nothing is sent yet.
+const pushPane = async ($: Engine, on: On, files: Map<string, string>) => {
+  engine(on, { HOME: '/Users/me' }, files)
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const copied: string[] = []
+  on('ui.copy', (_$, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true } }
+  })
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const label = async (key: string) => (await ui.find({ type: 'Button', key }))?.props.label
+  const isOpen = async () => (await ui.find({ type: 'Box', key: 'push:box' })) !== undefined
+  const topic = async () => (await ui.find({ type: 'Input', key: 'push:topic' }))?.props.value as string | undefined
+  return { ui, toasts, copied, label, isOpen, topic }
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+test('the first press of 📱 opens its menu with a random topic and keeps nothing; Cancel leaves 📱 off, and Save keeps the topic and turns it on', async ($, on) => {
+  const files = new Map<string, string>()
+  const { ui, label, isOpen, topic } = await pushPane($, on, files)
+  expect(await label('push')).toBe('📱 Off')
+  expect(await label('push:menu')).toBe('▼')
+  expect(await isOpen()).toBe(false)
+
+  await ui.press({ key: 'push' })
+  expect(await isOpen()).toBe(true)
+  expect(await label('push')).toBe('📱 Off')
+  expect(await label('push:menu')).toBe('▲')
+  const first = (await topic()) ?? ''
+  expect(first).toMatch(UUID)
+  expect((await ui.find({ type: 'Link' }))?.props.href).toBe(`https://ntfy.sh/${first}`)
+  expect(await ui.find({ type: 'Text', text: /ntfy\.sh, a free public service/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Treat it as a password/ })).toBeDefined()
+  expect((await ui.findAll({ type: 'Link' })).map(link => link.props.href)).toEqual([
+    `https://ntfy.sh/${first}`,
+    'https://github.com/M-i-k-e-l/agent-state/blob/main/docs/phone-push.md#push-on-idle',
+    'https://github.com/M-i-k-e-l/agent-state/blob/main/docs/phone-push.md#keep-missed-pushes',
+    'https://github.com/M-i-k-e-l/agent-state/blob/main/docs/phone-push.md#priority',
+    'https://github.com/M-i-k-e-l/agent-state/blob/main/docs/phone-push.md#only-when-im-away',
+    'https://github.com/M-i-k-e-l/agent-state/blob/main/docs/phone-push.md',
+  ])
+  expect(files.has('store:pushTopic')).toBe(false)
+  expect(files.has('store:push')).toBe(false)
+
+  // Cancel leaves the menu open; ▲ closes it.
+  await ui.press({ key: 'push:cancel' })
+  expect(await isOpen()).toBe(true)
+  await ui.press({ key: 'push:menu' })
+  expect(await isOpen()).toBe(false)
+  expect(await label('push')).toBe('📱 Off')
+  expect(files.has('store:pushTopic')).toBe(false)
+
+  // Still no topic, so the next press opens the menu again, on the same topic: a
+  // link copied before still holds. 🎲 rolls another, which a reopening keeps too.
+  await ui.press({ key: 'push' })
+  expect(await topic()).toBe(first)
+  await ui.press({ key: 'push:roll' })
+  const second = (await topic()) ?? ''
+  expect(second).toMatch(UUID)
+  expect(second).not.toBe(first)
+  await ui.press({ key: 'push:menu' })
+  await ui.press({ key: 'push' })
+  expect(await topic()).toBe(second)
+  await ui.press({ key: 'push:save' })
+  expect(await isOpen()).toBe(true)
+  expect(await topic()).toBe(second)
+  expect(files.get('store:pushTopic')).toBe(JSON.stringify(second))
+  expect(files.get('store:push')).toBe('true')
+  expect(await label('push')).toBe('📱 On')
+  await ui.unmount()
+})
+
+test('with a topic kept, 📱 is a plain switch, and ▼ opens and closes the menu on the kept topic', async ($, on) => {
+  const kept = 'my-own-topic-0123456789'
+  const files = new Map([['store:pushTopic', JSON.stringify(kept)]])
+  const { ui, label, isOpen, topic } = await pushPane($, on, files)
+  const push = async () => (await ui.find({ type: 'Button', key: 'push' }))?.props
+  expect(await push()).toMatchObject({ label: '📱 Off', plain: true })
+  await ui.press({ key: 'push' })
+  expect(await isOpen()).toBe(false)
+  expect(await push()).toMatchObject({ label: '📱 On', variant: 'primary' })
+  expect((await push())?.plain).toBeUndefined()
+  expect(files.get('store:push')).toBe('true')
+  await ui.press({ key: 'push' })
+  expect(files.get('store:push')).toBe('false')
+
+  await ui.press({ key: 'push:menu' })
+  expect(await isOpen()).toBe(true)
+  expect(await topic()).toBe(kept)
+  await ui.press({ key: 'push:menu' })
+  expect(await isOpen()).toBe(false)
+  expect(await label('push')).toBe('📱 Off')
+  await ui.unmount()
+})
+
+test('🎲 and typing change the topic in the menu alone until Save; a topic too short or of other characters is refused', async ($, on) => {
+  const kept = 'my-own-topic-0123456789'
+  const files = new Map([
+    ['store:pushTopic', JSON.stringify(kept)],
+    ['store:push', 'true'],
+  ])
+  const { ui, copied, toasts, isOpen, topic } = await pushPane($, on, files)
+  await ui.press({ key: 'push:menu' })
+  expect(await ui.find({ type: 'Text', text: /^Not saved yet/ })).toBeUndefined()
+
+  await ui.press({ key: 'push:roll' })
+  const rolled = (await topic()) ?? ''
+  expect(rolled).toMatch(UUID)
+  expect(await ui.find({ type: 'Text', text: /^Not saved yet/ })).toBeDefined()
+  expect(files.get('store:pushTopic')).toBe(JSON.stringify(kept))
+  await ui.press({ key: 'push:copy' })
+  expect(copied).toEqual([`https://ntfy.sh/${rolled}`])
+  expect(toasts).toEqual(['📱 Topic link copied.'])
+  // Cancel puts the saved topic back in the field and leaves the menu open.
+  await ui.press({ key: 'push:cancel' })
+  expect(files.get('store:pushTopic')).toBe(JSON.stringify(kept))
+  expect(await isOpen()).toBe(true)
+  expect(await topic()).toBe(kept)
+  expect(await ui.find({ type: 'Text', text: /^Not saved yet/ })).toBeUndefined()
+
+  for (const bad of ['short', 'has spaces in it, and more', 'x'.repeat(65)]) {
+    await ui.input({ key: 'push:topic', text: bad, kind: 'change' })
+    await ui.press({ key: 'push:save' })
+    expect(await isOpen()).toBe(true)
+    expect(await ui.find({ type: 'Text', text: 'A topic is 16 to 64 letters, digits, - or _.' })).toBeDefined()
+    expect(files.get('store:pushTopic')).toBe(JSON.stringify(kept))
+  }
+  // Enter in the field saves nothing; Save does, and a new topic leaves 📱 as it was.
+  await ui.input({ key: 'push:topic', text: 'another_topic_of_mine', kind: 'change' })
+  expect(await ui.find({ type: 'Text', text: 'A topic is 16 to 64 letters, digits, - or _.' })).toBeUndefined()
+  await ui.input({ key: 'push:topic', text: 'another_topic_of_mine' })
+  expect(files.get('store:pushTopic')).toBe(JSON.stringify(kept))
+  await ui.press({ key: 'push:save' })
+  expect(await isOpen()).toBe(true)
+  expect(toasts.at(-1)).toBe('📱 Topic saved.')
+  expect(files.get('store:pushTopic')).toBe(JSON.stringify('another_topic_of_mine'))
+  expect(files.get('store:push')).toBe('true')
+  await ui.unmount()
+})
+
+test('a first topic saved from a menu ▼ opened turns 📱 on too', async ($, on) => {
+  const files = new Map<string, string>()
+  const { ui, label } = await pushPane($, on, files)
+  await ui.press({ key: 'push:menu' })
+  await ui.press({ key: 'push:save' })
+  expect(files.get('store:pushTopic')).toMatch(/^"[0-9a-f-]{36}"$/)
+  expect(await label('push')).toBe('📱 On')
+  await ui.unmount()
+})
+
+test('an On kept with no topic shows 📱 Off, and its press opens the menu', async ($, on) => {
+  const files = new Map([['store:push', 'true']])
+  const { ui, label, isOpen } = await pushPane($, on, files)
+  expect(await label('push')).toBe('📱 Off')
+  await ui.press({ key: 'push' })
+  expect(await isOpen()).toBe(true)
+  expect(files.has('store:pushTopic')).toBe(false)
+  await ui.unmount()
+})
+
+test('the menu is kept for every session: one another session opened shows here with what it holds, and a close here is kept too', async ($, on) => {
+  const files = new Map<string, string>()
+  const { ui, isOpen, topic, label } = await pushPane($, on, files)
+  expect(await isOpen()).toBe(false)
+
+  // Another session opens the menu and types: this one draws it on its next redraw.
+  const theirs = { at: Date.now() + 1000, isOpen: true, draft: 'typed-in-another-session', rolled: 'rolled-in-another-session' }
+  files.set('store:pushMenu', JSON.stringify(theirs))
+  await ui.redraw()
+  expect(await isOpen()).toBe(true)
+  expect(await topic()).toBe('typed-in-another-session')
+  expect(await label('push:menu')).toBe('▲')
+
+  // Typing here is kept, later than theirs, and so is the cancel, which puts the rolled topic back.
+  await ui.input({ key: 'push:topic', text: 'typed-here-0123456789', kind: 'change' })
+  expect(JSON.parse(files.get('store:pushMenu') ?? '{}')).toMatchObject({ isOpen: true, draft: 'typed-here-0123456789' })
+  await ui.press({ key: 'push:cancel' })
+  const closed = JSON.parse(files.get('store:pushMenu') ?? '{}') as { at: number }
+  expect(closed).toMatchObject({ isOpen: true, draft: 'rolled-in-another-session', rolled: 'rolled-in-another-session' })
+  expect(closed.at).toBeGreaterThan(theirs.at)
+  expect(files.has('store:pushTopic')).toBe(false)
+  await ui.press({ key: 'push:menu' })
+  expect(JSON.parse(files.get('store:pushMenu') ?? '{}')).toMatchObject({ isOpen: false, rolled: 'rolled-in-another-session' })
+
+  // An older menu left in the store does not come back over this one.
+  files.set('store:pushMenu', JSON.stringify({ ...theirs, at: theirs.at - 1 }))
+  await ui.redraw()
+  expect(await isOpen()).toBe(false)
+  await ui.unmount()
+})
+
+test('the topic field has two rows and no submit label, so the app draws it wide and with no button of its own', async ($, on) => {
+  const files = new Map<string, string>()
+  const { ui } = await pushPane($, on, files)
+  await ui.press({ key: 'push' })
+  const field = (await ui.find({ type: 'Input', key: 'push:topic' }))?.props
+  expect(field?.rows).toBe(2)
+  expect(field?.submitLabel).toBeUndefined()
+  expect(field?.label).toBeUndefined()
+  await ui.unmount()
+})
+
+// The engine beneath for a push, as session local_1 of the app with 📱 on and a topic
+// kept: each request to ntfy.sh is kept in `posts` and answered by `answer`.
+const TOPIC = 'my-own-topic-0123456789'
+const pushEngine = (
+  on: On,
+  files: Map<string, string>,
+  env: Record<string, string> = {},
+  ran: (readonly string[])[] = [],
+) => {
+  engine(on, { HOME: '/Users/me', CLAUDE_CODE_HOST_SESSION_ID: 'local_1', ...env }, files, ran)
+  on('classic.PermissionRequest', () => ({}))
+  on('tool.call', () => ({ result: {} }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const posts: { url: string; method?: string; headers?: Record<string, string>; body?: unknown }[] = []
+  const reply: { answer: () => { status: number; ok: boolean; headers: Record<string, string>; text: string } } = {
+    answer: () => ({ status: 200, ok: true, headers: {}, text: '{"id":"x"}' }),
+  }
+  on('http.fetch', (_$, e) => {
+    posts.push({ url: e.url, method: e.init?.method, headers: e.init?.headers, body: e.init?.body })
+    return { value: reply.answer() }
+  })
+  return { posts, toasts, reply, clock: mock.clock(on) }
+}
+const pushOn = (): Map<string, string> =>
+  new Map([
+    ['store:pushTopic', JSON.stringify(TOPIC)],
+    ['store:push', 'true'],
+  ])
+const OWN_FILE = '/Users/me/.claude/agent-state/local_1.json'
+
+test('a turn that ends asking the person something with a command still in the background pushes 🙋 and plays the sound; one that asks nothing sends no 💤', async ($, on) => {
+  const files = pushOn()
+  files.set('store:sound', JSON.stringify('545373__stwime__up3.mp3'))
+  const { posts, clock } = pushEngine(on, files)
+  const played: unknown[] = []
+  on('audio.play', (_$, e) => {
+    played.push(e)
+    return { value: undefined }
+  })
+  on('classic.Stop', () => ({}))
+  const endWithShell = async (turnId: string): Promise<void> => {
+    await $.turn.start({ text: 'hi', turnId })
+    await $.classic.Stop({
+      stop_hook_active: false,
+      background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'dev server' }],
+    })
+    await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId, reason: 'answer' })
+    await clock.advance(10_000)
+  }
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+
+  // Nothing asked: the session is still at work behind the prompt, and sends nothing.
+  await endWithShell('t1')
+  expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '💤 idle', note: '⏳1' })
+  expect(posts).toEqual([])
+  expect(played).toEqual([])
+
+  // Asked: 🙋 goes out once, and the sound plays, with the command still running.
+  files.set(RECORD, ASKED)
+  await endWithShell('t2')
+  expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '💤 idle', note: '⏳1' })
+  expect(posts.map(post => post.body)).toEqual(['🙋 project'])
+  expect(played).toHaveLength(1)
+})
+
+test('a turn that ends asking the person something with a subagent still running pushes 🙋 once; one that asks nothing, or was interrupted, sends nothing', async ($, on) => {
+  const files = pushOn()
+  const { posts, clock } = pushEngine(on, files)
+  let status: 'running' | 'completed' = 'running'
+  on('agent.list', () => {
+    return { value: [{ id: 'a1', description: 'maker', type: 'general-purpose', status }] }
+  })
+  const end = async (turnId: string, isAborted = false): Promise<void> => {
+    status = 'running'
+    await $.turn.start({ text: 'hi', turnId })
+    await $.turn.complete({ answer: 'done', durationMs: 5, isAborted, turnId, reason: isAborted ? 'aborted' : 'answer' })
+    await clock.advance(10_000)
+  }
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+
+  // Nothing asked: the session is in the background, and sends nothing.
+  await end('t1')
+  expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '🧵 background' })
+  expect(posts).toEqual([])
+
+  // An interrupted turn sends nothing, whatever the record holds.
+  files.set(RECORD, ASKED)
+  await end('t2', true)
+  expect(posts).toEqual([])
+
+  // Asked: 🙋 goes out with the subagent still running.
+  await end('t3')
+  expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '🧵 background' })
+  expect(posts.map(post => post.body)).toEqual(['🙋 project'])
+
+  // A rest with no new turn, here a /clear, reads the same record, and the same question is not pushed again.
+  await $.session.end({ reason: 'clear', sessionId: 'own-id', resume: { id: 'own-id' } })
+  await clock.advance(10_000)
+  expect(JSON.parse(files.get(OWN_FILE) ?? '{}')).toMatchObject({ state: '💤 idle', note: '' })
+  expect(posts.map(post => post.body)).toEqual(['🙋 project'])
+})
+
+test('with 📱 on, a session pushes as it leaves work: the state icon and its name, kept nowhere, with the phone link when it has Remote Control', async ($, on) => {
+  const files = pushOn()
+  const { posts, clock } = pushEngine(on, files)
+  const answer = (turnId: string) =>
+    $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId, reason: 'answer' })
+
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  expect(posts).toEqual([])
+
+  // Idle waits ten seconds on the app's record, which may yet say the turn asked.
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await answer('t1')
+  await clock.advance(3000)
+  expect(posts).toEqual([])
+  await clock.advance(7000)
+  expect(posts).toEqual([
+    { url: `https://ntfy.sh/${TOPIC}`, method: 'POST', headers: { Title: 'Claude Code', Cache: 'no' }, body: '💤 project' },
+  ])
+
+  // A dialog goes out at once, with the link of the Remote Control session the record names last.
+  files.set(RECORD, JSON.stringify({ bridgeSessionIds: ['session_old', 'session_01AbC'] }))
+  await $.turn.start({ text: 'hi', turnId: 't2' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  await clock.advance(0)
+  expect(posts).toHaveLength(2)
+  expect(posts[1]).toMatchObject({
+    headers: { Title: 'Claude Code', Cache: 'no', Click: 'claude://claude.ai/code/session_01AbC' },
+    body: '🔐 project',
+  })
+
+  // A turn that ended asking the person something is 🙋, as soon as the record says so.
+  await answer('t2')
+  await $.turn.start({ text: 'hi', turnId: 't3' })
+  files.set(RECORD, JSON.stringify({ ...JSON.parse(ASKED), bridgeSessionIds: ['not a session id'] }))
+  await answer('t3')
+  await clock.advance(0)
+  expect(posts).toHaveLength(3)
+  expect(posts[2]?.body).toBe('🙋 project')
+  expect(posts[2]?.headers).toEqual({ Title: 'Claude Code', Cache: 'no' })
+
+  // The session's end is no push.
+  await $.turn.start({ text: 'hi', turnId: 't4' })
+  await $.session.end({ reason: 'other', sessionId: 'own-id', resume: { id: 'own-id' } })
+  await clock.advance(10_000)
+  expect(posts).toHaveLength(3)
+})
+
+test('Priority is 3 with no header until another is picked, which every push then carries', async ($, on) => {
+  const files = pushOn()
+  const { posts, clock } = pushEngine(on, files)
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'push:menu' })
+  const test = async (): Promise<void> => {
+    await ui.press({ key: 'push:test' })
+    await clock.advance(0)
+  }
+
+  await test()
+  expect(posts[0]?.headers).toEqual({ Title: 'Claude Code', Cache: 'no' })
+  await ui.select({ key: 'push:priority', value: '4' })
+  expect(files.get('store:pushPriority')).toBe('4')
+  await test()
+  expect(posts[1]?.headers).toEqual({ Title: 'Claude Code', Priority: '4', Cache: 'no' })
+  // A session's own push carries it too.
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  await clock.advance(0)
+  expect(posts[2]?.headers).toEqual({ Title: 'Claude Code', Priority: '4', Cache: 'no' })
+  await ui.select({ key: 'push:priority', value: '3' })
+  await test()
+  expect(posts[3]?.headers).toEqual({ Title: 'Claude Code', Cache: 'no' })
+  // A value that is no priority changes nothing.
+  await ui.select({ key: 'push:priority', value: '9' }).catch(() => undefined)
+  expect(files.get('store:pushPriority')).toBe('3')
+})
+
+test('a kept priority or Away after that is out of range counts as the default', async ($, on) => {
+  const files = pushOn()
+  files.set('store:pushPriority', '9')
+  files.set('store:pushAwaySecs', '5')
+  const { posts, clock } = pushEngine(on, files)
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'push:menu' })
+  expect((await ui.find({ type: 'Select', key: 'push:priority' }))?.props.value).toBe('3')
+  expect((await ui.find({ type: 'Input', key: 'push:away:secs' }))?.props.value).toBe('120')
+  await ui.press({ key: 'push:test' })
+  await clock.advance(0)
+  expect(posts[0]?.headers).toEqual({ Title: 'Claude Code', Cache: 'no' })
+  await ui.unmount()
+})
+
+test('the topic reaches no toast and no line of the log, whether the push goes out, is refused or fails', async ($, on) => {
+  const files = pushOn()
+  const ran: (readonly string[])[] = []
+  const { posts, toasts, reply, clock } = pushEngine(on, files, { AGENT_STATE_LOG: '/tmp/log' }, ran)
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ask = async (id: string): Promise<void> => {
+    await $.turn.start({ text: 'hi', turnId: id })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+    await clock.advance(0)
+  }
+  await ask('t1')
+  // ntfy's refusal and a failure to send both name the topic, as a real one may.
+  reply.answer = () => ({ status: 429, ok: false, headers: {}, text: `{"error":"limit reached for ${TOPIC}"}` })
+  await ask('t2')
+  reply.answer = () => {
+    throw new Error(`could not reach https://ntfy.sh/${TOPIC}`)
+  }
+  await ask('t3')
+  expect(posts).toHaveLength(3)
+  expect(ran.some(argv => argv.includes('/tmp/log'))).toBe(true)
+  expect(ran.flat().filter(arg => arg.includes(TOPIC))).toEqual([])
+  expect(toasts.length).toBeGreaterThan(0)
+  expect(toasts.filter(text => text.includes(TOPIC))).toEqual([])
+})
+
+test('Keep missed pushes leaves out the header that asks ntfy.sh not to keep a push, and Push on idle: Off holds a plain idle push', async ($, on) => {
+  const files = pushOn()
+  const { posts, toasts, clock } = pushEngine(on, files)
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const ask = async (id: string): Promise<void> => {
+    await $.turn.start({ text: 'hi', turnId: id })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+    await clock.advance(0)
+  }
+  const rest = async (id: string): Promise<void> => {
+    await $.turn.start({ text: 'hi', turnId: id })
+    await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: id, reason: 'answer' })
+    await clock.advance(10000)
+  }
+  await ui.press({ key: 'push:menu' })
+  const label = async (key: string) => (await ui.find({ type: 'Button', key }))?.text
+
+  expect(await label('push:keep')).toBe('Keep missed pushes: Off')
+  await ask('t1')
+  expect(posts[0]?.headers).toEqual({ Title: 'Claude Code', Cache: 'no' })
+  await ui.press({ key: 'push:keep' })
+  expect(await label('push:keep')).toBe('Keep missed pushes: On')
+  await ask('t2')
+  expect(posts[1]?.headers).toEqual({ Title: 'Claude Code' })
+  await ui.press({ key: 'push:test' })
+  await clock.advance(0)
+  expect(posts[2]?.headers).toEqual({ Title: 'Claude Code' })
+  // This session has no Remote Control, so its test push has no link, and the toast says so.
+  expect(toasts.at(-1)).toBe(
+    "📱 Test push sent. It has no link to tap: this session has no Remote Control. Nothing on your phone? Check it's subscribed to this topic.",
+  )
+
+  // On, the default: a plain idle is pushed.
+  expect(await label('push:idle')).toBe('Push on idle: On')
+  await rest('t3')
+  expect(posts).toHaveLength(4)
+  expect(posts[3]?.body).toBe('💤 project')
+  // Off: a plain idle is held, a dialog still goes out.
+  await ui.press({ key: 'push:idle' })
+  expect(await label('push:idle')).toBe('Push on idle: Off')
+  expect(files.get('store:pushWhen')).toBe('"needs"')
+  await rest('t4')
+  expect(posts).toHaveLength(4)
+  await ask('t5')
+  expect(posts).toHaveLength(5)
+  // Off: a turn that ends asking the person something still goes out, as 🙋.
+  files.set(RECORD, ASKED)
+  await rest('t6')
+  expect(posts).toHaveLength(6)
+  expect(posts[5]?.body).toBe('🙋 project')
+  await ui.unmount()
+})
+
+test("Only when I'm away holds a push while the Mac was used in the last two minutes, and sends it when the time is longer or can't be read", async ($, on) => {
+  const files = pushOn()
+  const { posts, clock } = pushEngine(on, files)
+  const IOREG = 'run:/usr/sbin/ioreg'
+  const since = (seconds: number): string => `    | |   "HIDIdleTime" = ${seconds * 1e9}\n`
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const ask = async (id: string): Promise<void> => {
+    await $.turn.start({ text: 'hi', turnId: id })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+    await clock.advance(0)
+  }
+
+  // Off: sent, with the Mac in use.
+  files.set(IOREG, since(5))
+  await ask('t1')
+  expect(posts).toHaveLength(1)
+
+  await ui.press({ key: 'push:menu' })
+  expect((await ui.find({ type: 'Button', key: 'push:away' }))?.text).toBe("Only when I'm away: Off")
+  await ui.press({ key: 'push:away' })
+  expect((await ui.find({ type: 'Button', key: 'push:away' }))?.text).toBe("Only when I'm away: On")
+  expect(files.get('store:pushAway')).toBe('true')
+
+  // On, the Mac used five seconds ago: held.
+  await ask('t2')
+  expect(posts).toHaveLength(1)
+  // On, the Mac untouched for three minutes: sent.
+  files.set(IOREG, since(180))
+  await ask('t3')
+  expect(posts).toHaveLength(2)
+  // On, the time not readable: sent.
+  files.delete(IOREG)
+  await ask('t4')
+  expect(posts).toHaveLength(3)
+
+  // Away after: 120 seconds until another whole number in range is typed, which is kept as typed.
+  const secs = async () => (await ui.find({ type: 'Input', key: 'push:away:secs' }))?.props.value
+  const refusal = /^Away after is a whole number of seconds, 10 to 3600\. Still \d+\.$/
+  expect(await secs()).toBe('120')
+  files.set(IOREG, since(40))
+  await ask('t5')
+  expect(posts).toHaveLength(3)
+  await ui.input({ key: 'push:away:secs', text: '30', kind: 'change' })
+  expect(files.get('store:pushAwaySecs')).toBe('30')
+  expect(await ui.find({ type: 'Text', text: refusal })).toBeUndefined()
+  await ask('t6')
+  expect(posts).toHaveLength(4)
+  // What isn't one stays in the field with why, and the seconds kept before stay in force.
+  for (const bad of ['', '5', '3601', '1.5', 'abc']) {
+    await ui.input({ key: 'push:away:secs', text: bad, kind: 'change' })
+    expect(await secs()).toBe(bad)
+    expect((await ui.find({ type: 'Text', text: refusal }))?.text).toBe(
+      'Away after is a whole number of seconds, 10 to 3600. Still 30.',
+    )
+    expect(files.get('store:pushAwaySecs')).toBe('30')
+  }
+  await ui.unmount()
+})
+
+test('nothing is pushed with 📱 off, with no topic, or once the session is back at work', async ($, on) => {
+  const files = new Map<string, string>([['store:pushTopic', JSON.stringify(TOPIC)]])
+  const { posts, clock } = pushEngine(on, files)
+  const turn = async (turnId: string) => {
+    await $.turn.start({ text: 'hi', turnId })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+    await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId, reason: 'answer' })
+    await clock.advance(10_000)
+  }
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  await turn('off')
+  expect(posts).toEqual([])
+
+  // On, and the topic gone.
+  files.set('store:push', 'true')
+  files.delete('store:pushTopic')
+  await turn('none')
+  expect(posts).toEqual([])
+
+  // On with a topic: an answer followed by a new turn inside the wait sends nothing.
+  files.set('store:pushTopic', JSON.stringify(TOPIC))
+  await $.turn.start({ text: 'hi', turnId: 'a' })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 'a', reason: 'answer' })
+  await clock.advance(1000)
+  await $.turn.start({ text: 'hi', turnId: 'b' })
+  await clock.advance(10_000)
+  expect(posts).toEqual([])
+})
+
+test('a session one of the app\'s sessions started pushes nothing', async ($, on) => {
+  const files = pushOn()
+  const { posts, clock } = pushEngine(on, files, { CLAUDECODE: '1' })
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' })
+  await clock.advance(10_000)
+  expect(posts).toEqual([])
+})
+
+test('a push ntfy.sh refuses or that cannot go out toasts why and marks the session 🔕, a press of it toasts again, and a push that goes out clears it', async ($, on) => {
+  const files = pushOn()
+  const { posts, toasts, reply, clock } = pushEngine(on, files)
+  const ask = async (turnId: string) => {
+    await $.turn.start({ text: 'hi', turnId })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+    await clock.advance(0)
+  }
+  const marked = () => (JSON.parse(files.get(OWN_FILE) ?? '{}') as { pushFailed?: string }).pushFailed
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Button', text: '🔕' })).toBeUndefined()
+
+  reply.answer = () => ({ status: 429, ok: false, headers: {}, text: '{"code":42901,"http":429,"error":"limit reached: too many requests"}' })
+  await ask('t1')
+  const refused = '📱 The push "🔐 project" wasn\'t sent: ntfy.sh answered 429: limit reached: too many requests.'
+  expect(toasts).toEqual([refused])
+  expect(marked()).toBe(refused)
+  await ui.redraw()
+  expect((await ui.find({ type: 'Button', text: '🔕' }))?.key).toBe('unsent:local_1')
+  await ui.press({ key: 'unsent:local_1' })
+  expect(toasts).toEqual([refused, refused])
+
+  // With 📱 off the mark is not shown.
+  files.set('store:push', 'false')
+  await ui.redraw()
+  expect(await ui.find({ type: 'Button', text: '🔕' })).toBeUndefined()
+  files.set('store:push', 'true')
+
+  // No answer at all, and an answer that names the topic: the topic is kept out of what is said.
+  reply.answer = () => {
+    throw new Error('offline')
+  }
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' })
+  await ask('t2')
+  expect(toasts).toHaveLength(3)
+  expect(toasts[2]).toContain("wasn't sent: ntfy.sh couldn't be reached (")
+  expect(marked()).toBe(toasts[2])
+  reply.answer = () => ({ status: 404, ok: false, headers: {}, text: `no such page /${TOPIC}` })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't2', reason: 'answer' })
+  await ask('t2b')
+  expect(toasts[3]).toBe('📱 The push "🔐 project" wasn\'t sent: ntfy.sh answered 404: no such page /<topic>.')
+  expect(marked()).toBe(toasts[3])
+
+  // The session's next start forgets the mark: the push may go out this time.
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  expect(marked()).toBeUndefined()
+  reply.answer = () => ({ status: 404, ok: false, headers: {}, text: 'gone' })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't2b', reason: 'answer' })
+  await ask('t2c')
+  expect(marked()).toBe(toasts[4])
+
+  // One that goes out clears the mark.
+  reply.answer = () => ({ status: 200, ok: true, headers: {}, text: '{}' })
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't2c', reason: 'answer' })
+  await ask('t3')
+  expect(posts).toHaveLength(5)
+  expect(marked()).toBeUndefined()
+  await ui.redraw()
+  expect(await ui.find({ type: 'Button', text: '🔕' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('Send test push goes to the topic in the menu, saved or not, and says how it went; a topic the guard refuses sends nothing', async ($, on) => {
+  const files = new Map<string, string>()
+  const { posts, toasts, reply } = pushEngine(on, files)
+  files.set(RECORD, JSON.stringify({ bridgeSessionIds: ['session_01AbC'] }))
+  await $.session.start({ cwd: '/x', surface: null, isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'push' })
+  const rolled = (await ui.find({ type: 'Input', key: 'push:topic' }))?.props.value as string
+
+  await ui.press({ key: 'push:test' })
+  expect(posts).toEqual([
+    {
+      url: `https://ntfy.sh/${rolled}`,
+      method: 'POST',
+      headers: { Title: 'Claude Code', Cache: 'no', Click: 'claude://claude.ai/code/session_01AbC' },
+      body: '📱 Test push from agent-state',
+    },
+  ])
+  expect(toasts).toEqual(["📱 Test push sent. Nothing on your phone? Check it's subscribed to this topic."])
+  expect(files.has('store:pushTopic')).toBe(false)
+
+  reply.answer = () => ({ status: 500, ok: false, headers: {}, text: '' })
+  await ui.press({ key: 'push:test' })
+  expect(toasts[1]).toBe("📱 The test push wasn't sent: ntfy.sh answered 500.")
+
+  await ui.input({ key: 'push:topic', text: 'short', kind: 'change' })
+  await ui.press({ key: 'push:test' })
+  expect(posts).toHaveLength(2)
+  expect(await ui.find({ type: 'Text', text: 'A topic is 16 to 64 letters, digits, - or _.' })).toBeDefined()
+  await ui.unmount()
 })

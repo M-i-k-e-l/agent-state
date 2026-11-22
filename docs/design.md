@@ -68,7 +68,9 @@ Rules:
   unless `postTurnSummary.status_category` is `failed`; with no `turnWrapUp`, a `postTurnSummary` whose
   `postTurnSummaryFor` is the `lastAssistantUuid` and whose category is `blocked` or `need_input`. The app clears
   `turnWrapUp` when the person sends a message and when a turn starts. The record does not say whether the session
-  runs, so the mod's own idle stands for that, without `⏳N`: the app counts background work as running.
+  runs, so the mod's own idle stands for that, with or without `⏳N`. The app counts background work as running; the
+  mod does not follow it there, as the question waits on the person whatever runs behind it, and a command that
+  never ends, a dev server, would hide the 🙋 for good. The sound and the push take the same rule.
 
 ## Test table
 
@@ -171,7 +173,7 @@ the app starts has neither (observed, every session running at the time). Either
 | Activity, a state other than idle, or idle with background commands puts a session in Recent | a session running or waiting must not sink below what the person last messaged |
 | **→ Today** moves an idle session out of Recent until its next message, activity or run, and to Older after midnight, kept in the plugin's store | the person is done with it for now; new work on it is news again. Its color stays, as the Projects view does not know of the move |
 | **Pin** keeps a session in Recent, in its place by time like the rest, until **Unpin**, in any state, kept in the plugin's store; a pinned session has no **→ Today**, a pin outranks a move, and Unpin forgets the move | the person wants it at hand whatever its age, and Recent reads as one timeline, so a pin does not reorder it; Pin and **→ Today** sit together at the right of the state line, so they read as the row's actions and Pin lines up down the box; on the name's line a long name pushed Pin out, and spread across the state line → Today floated alone in a wide pane. Its color stays, as the Projects view does not know of pins. A stale pane can store a move under a pin, in either order of the writes; forgetting it on Unpin needs no guard on either press |
-| **Dismiss** shows a 🙋 needs you session idle until its next message, activity or run, in both views, kept in the plugin's store and dated no earlier than the row's own times | the person has seen the question and wants it off the list without answering; 🙋 is a state both views draw, so its button is in both, unlike → Today and Pin; a 🙋 session is never plain idle, so Dismiss and → Today never share a row, and once dismissed the session gets → Today like any idle one |
+| **Dismiss** shows a 🙋 needs you session idle until its next message, activity or run, in both views, kept in the plugin's store and dated no earlier than the row's own times | the person has seen the question and wants it off the list without answering; 🙋 is a state both views draw, so its button is in both, unlike → Today and Pin; a 🙋 session is never plain idle, so Dismiss and → Today never share a row, and once dismissed the session gets → Today like any idle one, or shows ⏳ again when it has background commands |
 | Idle with background commands (`⏳N`) counts as at work in the pane: in Recent, `success`, ranked with background, no **→ Today**, and counted as ⏳ after 🧵 on the button, not as 💤 | it is running as far as the person is concerned; what the commands are is not looked at, so a server keeps the session at work for as long as it runs |
 | A pin of a session the app does not list stays | the list can be stale, fail or stop at 200, and an archived session can come back; a pin no row has draws nothing |
 | A run is the file's `ranAt`, not `since` | a restart or a reload writes idle with a new `since`, which would undo a move though nothing ran |
@@ -222,3 +224,74 @@ with its own close mark, as the test kit cannot act as a person there either.
   left: a person's accept for one call of a subagent clears 🔐 while a second dialog of that subagent waits.
 - When a permission dialog is dismissed with Esc, the tool's return writes ⚙️ about 30ms before the turn's end writes
   💤; not visible. A tool interrupted while it runs writes 💤 alone.
+
+## Phone push
+
+With 📱 on, a session of the desktop app sends a push to the person's phone as it stops working and waits. The steps
+for the phone, and what each option does, are in [phone-push.md](phone-push.md); this is why it is built as it is.
+
+- **Through ntfy.sh.** It is free, needs no account, and needs no app on the phone: its web page takes pushes in
+  Chrome on Android and from the Home Screen on an iPhone, so anyone who installs the mod can use it. The app's own
+  push to the phone was the first choice, and did not work well enough to lean on.
+- **What is sent.** `POST https://ntfy.sh/<topic>`, the body `<icon> <session name>`, the headers `Title: Claude Code`,
+  `Cache: no` unless Keep missed pushes is on, `Priority` when the menu's is not 3, ntfy's default, and `Click` with
+  the session's link when it has Remote Control. Left without a title, ntfy shows the topic as one.
+- **Which sessions, and when.** A session the app hosts, as it leaves work: 🔐, ❓, 🙋 or 💤. Not a session's end,
+  and not a session another session started. A 💤 waits up to 10 seconds on the app's record of the session, which
+  may turn it into 🙋. A turn that ends with a command or a subagent still in the background has not left work and
+  sends no 💤, but its 🙋 is sent, once for the turn: the question waits on the person whatever runs behind it. With
+  subagents the pane still shows 🧵 and the sound does not play; only the push follows the question there. Not sent:
+  with a dialog up, which pushed for itself, and for an interrupted turn, whose record may hold an older question. Known and left: a 💤 still in that wait goes out though the session ended or was cleared
+  meanwhile, and though 📱 was turned off meanwhile.
+- **The topic** is a random UUID made on the Mac, or one the person types (16 to 64 letters, digits, `-` or `_`). It
+  is never made from an id of Claude's. Whoever knows it reads the pushes, so it is kept out of toasts and the log:
+  a failure's reason has it replaced by `<topic>`. No online QR service draws its link, as that service would be
+  handed the topic.
+- **The link** is `claude://claude.ai/code/<id>`, the id being the last of `bridgeSessionIds` in the app's record of
+  the session. It is the one form that reached the Claude app on both phones; the `intent://` forms tried beside it
+  are removed. ntfy's web page opens a push's link itself, in the browser, so no tap goes straight to the Claude app:
+  on Android Chrome shows **Continue**, on an iPhone ntfy opens and shows **Open link**.
+- **The options** (Push on idle, Keep missed pushes, Only when I'm away and its seconds, Priority) are kept in the plugin's
+  store and read as each push is about to go, so they hold for every session at once and need no Save. Save and
+  Cancel are the topic's alone, and leave the menu open.
+- **Only when I'm away** reads `HIDIdleTime` with `/usr/sbin/ioreg`: the nanoseconds since the last key or pointer
+  move. Under the seconds set (120 unless changed), the push is held, and it is not sent later. A time that can't be
+  read sends the push: one too many is the lesser miss.
+- **The menu** is kept in the store too, with the time of its last change, as every session draws the pane and the
+  person moves between them. Each session also holds the last it wrote or read, and the later of the two stands, so
+  a redraw doesn't put an older draft back over what is being typed.
+- **A push that fails** shows a toast with ntfy's reason and 🔕 on the session's row, which says it again when
+  pressed. The next push that goes out, or the session's next start, clears it. ntfy.sh takes 250 pushes a day from
+  one network address, 60 in a burst, and answers 429 past that.
+- **Send test push** goes to the topic in the field, saved or not, from the session whose pane was pressed. It
+  follows Keep missed pushes and Priority, and ignores the other options. ntfy.sh can't say whether anyone listens to a topic, so
+  the toast says only that the push went out, and that it has no link when the session has no Remote Control.
+
+What the app's drawing allows, found by trying:
+
+- A one-line field is drawn at a width of its own; a field of two rows or more fills the pane. A box of a set width
+  around a one-line field narrows it. Nothing sets where a field's text sits.
+- A field shows a button of its own only with a `submitLabel`, and that button is Enter. The topic field has none,
+  and Enter there does nothing: only Save saves.
+- A dropdown takes no width, and a box of a set width around it does not stretch it. Push on idle was a dropdown of
+  two choices and became a toggle for that reason.
+- A toggle drawn without chrome when off is shorter than a filled one, so the rows below it jumped. On and off are
+  both drawn as buttons, primary and secondary.
+- The toggles and their links are two columns, so the links start at one edge; each link's box grows to its toggle's
+  height.
+- A change to the mod's code does not reliably load into a running app: restart the app.
+
+Done by hand: pushes on Android with Chrome in the background and with the ntfy tab closed, and on an iPhone from the
+Home Screen (a phone on another Claude account: the tap reached the Claude app); the tap on both; Push on idle off;
+Only when I'm away, both held and sent. Not tried: Keep missed pushes on a phone, the ntfy app in place of its
+web page, and 🙋 for a turn that asks with a command in the background (pane, sound, push and Dismiss) or with a subagent
+running (push).
+
+## Phone push: might add later
+
+- An own ntfy server: an option for a server address in place of ntfy.sh, for someone who runs ntfy themselves and
+  wants the pushes kept off a public service.
+- A QR code of the topic link in the menu, to scan with the phone in place of copying the link over. It has to be
+  drawn by the mod itself: an online QR service would be handed the topic.
+- The menu on a surface with no text field, as the phone app's pane may be: there the menu shows the topic as plain
+  text, so it can't be typed or pasted. Not tried on a phone.

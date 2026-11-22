@@ -47,7 +47,7 @@ tested on. The hooks API it uses is early access and may change between releases
 ## The desktop app
 
 The **Sessions** button counts the app's sessions in each state, what waits on you first, such as
-`Sessions · 🔐1 ❓1 🙋1 ⚙️2 ⏳1 💤5`. An idle session with a background command still running counts as ⏳, not 💤.
+`Sessions · 🔐1 ❓1 🙋1 ⚙️2 ⏳1 💤5`. An idle session with a background command still running counts as ⏳, not 💤, or as 🙋 when its turn ended asking you something.
 Clicking it opens or closes the pane, for every session of the app.
 
 The pane lists the sessions under their projects, each with its name, its state and how long it has been in that state.
@@ -72,11 +72,17 @@ Each session in **Recent** ends its state line with **Pin**, which keeps it in *
 press **Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
 unchanged, so a pinned idle session older than Recent's 2 hours, with no background command running, draws dim.
 
-**🔔 Alert**, at the far right of the **Time** and **Projects** line, picks a sound, for every session; **Off**, the default,
+**🔊**, at the far right of the **Time** and **Projects** line, picks a sound, for every session; **Off**, the default,
 plays none. Picking one plays it once. Every session then plays it when it turns 🔐 permission, ❓ input or 🙋 needs
 you. The sounds are CC0, from [Freesound](https://freesound.org); `hooks/register.tsx` credits each one.
 
-An idle session whose last turn ended asking you something shows 🙋 needs you, the session you are in too. It follows the
+**📱**, before it, sends a push to your phone when a session stops working and waits, for every session; it is off
+until you turn it on. The pushes go through [ntfy.sh](https://ntfy.sh), a free public service, to a topic that **▼**
+next to it sets, and they are not private. [Push to your phone](docs/phone-push.md) has the phone's steps, what a tap
+opens and what to check when no push arrives.
+
+An idle session whose last turn ended asking you something shows 🙋 needs you, the session you are in too, and one
+with a background command still running as well: the question outranks ⏳. It follows the
 app's own check of whether a session waits on you: the next-step box asked you a question, or, with no such box, the
 app's summary of the turn says it is blocked or needs your input. It stays until you send the session a message. Like
 permission and input, it sits in **Recent** and has no **→ Today**. **Dismiss**, in both views (before **Pin** in
@@ -89,8 +95,16 @@ idle.
 ## What it reads
 
 The mod reads Claude Code's `tool_decision` telemetry records to see the moment you approve a permission dialog; no
-other event says so. It reads them and changes none, and it sends nothing anywhere. This is why `claude plugin validate`
+other event says so. It reads them and changes none, and sends them nowhere. This is why `claude plugin validate`
 prints "hooks telemetry for: collector". It works with `DISABLE_TELEMETRY=1` set.
+
+The mod sends nothing anywhere unless **📱** is on or you press **Send test push** in its menu. With it on, each push
+goes to ntfy.sh: the state's icon, the
+session's name and, for a session with Remote Control, its link, which the mod reads from the app's own record of
+the session.
+
+With **Only when I'm away** on in 📱's menu, the mod asks macOS for the time since the last key or pointer move
+before each push, and reads nothing else of it.
 
 For 🙋 needs you, the pane reads the desktop app's own record of each idle session, in
 `~/Library/Application Support/Claude/claude-code-sessions/`, and changes none.
