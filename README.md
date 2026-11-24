@@ -16,7 +16,7 @@ tested on. The hooks API it uses is early access and may change between releases
 | 🙋 needs you           | The turn ended asking you something (desktop app only)                   |
 | 💤 idle `Oct 10 12:40` | Nothing is running, since that time                                      |
 | 💤 idle `… ⏳1`        | Waiting for you, with a background command still running                 |
-| 🧵 background          | Main agent is idle, a subagent is running                                |
+| 🧵 background          | Main agent is idle, a subagent or a workflow is running                  |
 | 📦 compacting          | The conversation is being compacted                                      |
 | (blank)                | The session ended                                                        |
 
@@ -86,7 +86,7 @@ next to it sets, and they are not private. [Push to your phone](docs/phone-push.
 opens and what to check when no push arrives.
 
 An idle session whose last turn ended asking you something shows 🙋 needs you, the session you are in too, and one
-with a background command or a subagent still running as well: the question outranks ⏳ and 🧵. It follows the
+with a background command, a subagent or a workflow still running as well: the question outranks ⏳ and 🧵. It follows the
 app's own check of whether a session waits on you: the next-step box asked you a question, or, with no such box, the
 app's summary of the turn says it is blocked or needs your input. It stays until you send the session a message. Like
 permission and input, it sits in **Recent** and has no **→ Today**. **Dismiss**, in both views (before **Pin** in
@@ -130,6 +130,13 @@ switch to it. Every ten seconds, the session on screen fetches the app's list of
 under what name, and saves it for the others to take when you switch to them.
 
 ## Limits
+
+In both:
+
+- A workflow you stop or pause yourself leaves 🧵 until your next message: Claude Code tells a mod nothing reliable of
+  it.
+- While a workflow runs, a turn you interrupt, or a reload of the mod, shows 💤 until the workflow reports or a later
+  turn ends.
 
 In iTerm2:
 

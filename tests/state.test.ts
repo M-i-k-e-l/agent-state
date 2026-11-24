@@ -250,6 +250,48 @@ test('idle counts the background shells its last Stop listed, a subagent and mon
   ])
 })
 
+test('a workflow its last Stop listed shows background, until a Stop lists none or a turn starts', async ($, on) => {
+  const writes: { state: string | undefined; note: string | undefined }[] = []
+  on('process.run', (_$, e) => {
+    writes.push({ state: e.argv[5], note: e.argv[10] })
+    return { value: RAN }
+  })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('classic.Stop', () => ({}))
+  on('agent.list', () => ({ value: [] }))
+  const stop = (types: string[]) =>
+    $.classic.Stop({
+      stop_hook_active: false,
+      background_tasks: types.map((type, i) => ({ id: `b${i}`, type, status: 'running', description: type })),
+    })
+
+  await $.turn.start({ text: 'research', turnId: 't40' })
+  await stop(['workflow', 'shell'])
+  await $.turn.complete({ answer: 'started', durationMs: 5, isAborted: false, turnId: 't40', reason: 'answer' })
+  // The workflow's report starts a turn, whose Stop lists it no more.
+  await $.turn.start({ text: '', turnId: 't41' })
+  await stop([])
+  await $.turn.complete({ answer: 'done', durationMs: 5, isAborted: false, turnId: 't41', reason: 'answer' })
+  // An interrupted turn raises no Stop: its start cleared the count.
+  await $.turn.start({ text: 'research', turnId: 't42' })
+  await stop(['workflow'])
+  await $.turn.complete({ answer: 'started', durationMs: 5, isAborted: false, turnId: 't42', reason: 'answer' })
+  await $.turn.start({ text: 'hi', turnId: 't43' })
+  await $.turn.complete({ answer: '', durationMs: 5, isAborted: true, turnId: 't43', reason: 'aborted' })
+
+  expect(writes).toEqual([
+    { state: '⚙️ working', note: '' },
+    { state: '🧵 background', note: '' },
+    { state: '⚙️ working', note: '' },
+    { state: '💤 idle', note: '' },
+    { state: '⚙️ working', note: '' },
+    { state: '🧵 background', note: '' },
+    { state: '⚙️ working', note: '' },
+    { state: '💤 idle', note: '' },
+  ])
+})
+
 test("the main agent's turn end logs every entry its Stop listed, with its status", async ($, on) => {
   const writes: Write[] = []
   on('process.run', (_$, e) => {

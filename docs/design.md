@@ -39,7 +39,7 @@ repeats.
 | --------------------------- | ------------------------------------------------------------------------------- |
 | ⚙️ working                  | `turn.start`; a tool's return while the turn is live; an approval (see below)   |
 | 💤 idle, with date and time | `turn.complete` of the current turn; `session.start`; `session.end` on `/clear` |
-| 🧵 background               | `turn.complete` while `$.agent.list()` has a running, pending or waiting agent  |
+| 🧵 background               | `turn.complete` while a subagent or a workflow runs, pends or waits (below)     |
 | 🔐 permission               | `classic.PermissionRequest`, main agent or subagent, tool not `AskUserQuestion` |
 | ❓ input                    | the main agent's `tool.call` on `AskUserQuestion`, before `next`                |
 | 📦 compacting               | the main agent's `session.compact`, trigger not `precompute`, before `next`     |
@@ -60,6 +60,18 @@ Rules:
   keeps one running for each (observed). A command may be a server that runs as long as the session, so it adds to idle and
   does not make it background. `classic.Stop` comes just before the main agent's `turn.complete` (observed); a turn's
   start clears the count, as an interrupted turn may raise no `Stop`.
+- A subagent is one that `$.agent.list()` gives as running, pending or waiting. A workflow (the `Workflow` tool, such
+  as a deep research) is one the main agent's last `classic.Stop` listed: `$.agent.list()` leaves a workflow's agents
+  out (its docs), and a session showed 💤 while its workflow ran (observed). A turn's start clears the count, as for
+  shells.
+- A workflow that ends by itself, done or failed, reports, which starts a turn: 🧵 ends there. One the person stops or
+  pauses sends a passive notice, which starts no turn (read from the engine's code), and no event a mod may read says so
+  reliably (its agents' turns may end aborted, but so does an agent skipped or retried alone): 🧵 holds until their next
+  message, and a subagent's dialog or a compaction that settles meanwhile writes 🧵 again.
+- A turn interrupted while a workflow runs may raise no `Stop`, and then it ends in 💤 until the workflow reports or a
+  later turn ends; so does a reload, which writes 💤 for a subagent too. Keeping the count over a turn's start would
+  trade that for a 🧵 that sticks when the workflow's own report turn is interrupted, and would differ from the shells'
+  count.
 - The tty is found by walking up the process tree from the `$.process.run` child; writes are serialized.
 - 🙋 needs you is drawn, never filed or written to the tab. Each redraw takes an idle session's record from
   `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/<id>.json`, read again only when its

@@ -119,6 +119,12 @@ let liveTurn: string | undefined
 // do not make it background. A turn's start clears the count, since an interrupted
 // turn may raise no Stop to list them again.
 let jobs = 0
+// The workflows in flight, as the same Stop listed them: they make the main agent's
+// rest background, as $.agent.list() leaves a workflow's agents out. A workflow that
+// ends by itself reports, which starts a turn and clears the count; one the person
+// stops or pauses sends a notice that starts none (read from the engine's code), so
+// background holds until their next message. A turn's start clears it like the shells'.
+let flows = 0
 // Every entry of that Stop's list as type:status, subagents too, for the log line.
 let listed = ''
 
@@ -283,9 +289,10 @@ const active = (): string => (waiting.size > 0 ? PERMISSION : WORKING)
 // work ends (observed).
 const LIVE = new Set<unknown>(['running', 'pending', 'waiting'])
 
-// What the main agent rests in: background while a subagent of it still runs.
+// What the main agent rests in: background while a subagent or workflow of it still runs.
 const resting = async ($: EngineInterface): Promise<string> => {
   if (waiting.size > 0) return PERMISSION
+  if (flows > 0) return BACKGROUND
   const agents = await $.agent.list().catch(() => [])
   const live = agents.filter(a => LIVE.has(a.status))
   return live.length > 0 ? BACKGROUND : IDLE
@@ -2160,6 +2167,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     // A /clear ends the conversation, not the process, and no session.start follows.
     jobs = 0
+    flows = 0
     listed = ''
     await emit($, `session.end reason=${e.reason}`, e.reason === 'clear' ? IDLE : CLEARED)
     return next(e)
@@ -2176,6 +2184,7 @@ export const register: Register = on => {
     isTurnLive = true
     liveTurn = e.turnId
     jobs = 0
+    flows = 0
     listed = ''
     hasPushedAsk = false
     turnAt = Date.now()
@@ -2204,12 +2213,13 @@ export const register: Register = on => {
   })
 
   // The main agent's Stop, raised just before its turn.complete (observed), lists the
-  // background work in flight. Only shells count: a subagent is counted from
-  // $.agent.list(), and a session watching its published artifacts for comments keeps
-  // a monitor running for each (observed).
+  // background work in flight. Shells add to idle and workflows make it background: a
+  // subagent is counted from $.agent.list(), and a session watching its published
+  // artifacts for comments keeps a monitor running for each (observed).
   on('classic.Stop', async ($, e, next) => {
     const tasks = e.background_tasks ?? []
     jobs = tasks.filter(t => t.type === 'shell').length
+    flows = tasks.filter(t => t.type === 'workflow').length
     listed = tasks.map(t => `${t.type}:${t.status}`).join(',')
     return next(e)
   })
