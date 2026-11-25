@@ -1216,6 +1216,10 @@ test('by time, an idle session in Recent moves to Today, for every pane, until i
     'warning',
     undefined,
   ])
+  // Today and Older have Pin too, and no → Today.
+  const keysOf = async (text: string): Promise<unknown[]> => (await again.findAll({ type: 'Button', text })).map(one => one.key)
+  expect(await keysOf('Pin')).toEqual(['pin:local_latest', 'pin:local_working', 'pin:local_window', 'pin:local_ran', 'pin:local_older'])
+  expect(await keysOf('→ Today')).toEqual(['today:local_latest'])
   await again.unmount()
 
   // The projects have no such button.
@@ -1325,8 +1329,21 @@ test('by time, a pinned session stays in Recent, in its place by time, for every
 
   const unpinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await boxes(unpinned)).toEqual(['Recent', 'local_latest', 'Older', 'local_job'])
-  expect(await keys(unpinned, 'Pin')).toEqual(['pin:local_latest'])
+  // Older has Pin too, and no → Today; a press brings the session back up to Recent.
+  expect(await keys(unpinned, 'Pin')).toEqual(['pin:local_latest', 'pin:local_job'])
+  expect(await keys(unpinned, '→ Today')).toEqual(['today:local_latest'])
+  await unpinned.press({ key: 'pin:local_job' })
   await unpinned.unmount()
+
+  const repinned = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(repinned)).toEqual(['Recent', 'local_latest', 'local_job'])
+  expect(await keys(repinned, 'Unpin')).toEqual(['pin:local_job'])
+  await repinned.press({ key: 'pin:local_job' })
+  await repinned.unmount()
+
+  const sunk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await boxes(sunk)).toEqual(['Recent', 'local_latest', 'Older', 'local_job'])
+  await sunk.unmount()
 
   // The projects have no pins.
   files.set('store:isByTime', 'false')
@@ -2017,7 +2034,7 @@ test('idle with a background command counts as at work: in Recent, green, Pin an
   expect(await names(ui)).toEqual(['Recent', 'local_latest', 'local_job', 'local_shell', 'local_moved', 'Older', 'local_old'])
   const keys = async (text: RegExp) => (await ui.findAll({ type: 'Button', text })).map(one => one.key)
   expect(await keys(/^→ Today$/)).toEqual(['today:local_latest'])
-  expect(await keys(/^Pin$/)).toEqual(['pin:local_latest', 'pin:local_job', 'pin:local_shell', 'pin:local_moved'])
+  expect(await keys(/^Pin$/)).toEqual(['pin:local_latest', 'pin:local_job', 'pin:local_shell', 'pin:local_moved', 'pin:local_old'])
   expect(await colors(ui)).toEqual(['warning', 'success', 'success', undefined])
   await ui.unmount()
 

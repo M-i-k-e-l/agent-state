@@ -1804,7 +1804,8 @@ export const register: Register = on => {
     // app draws one line of plain text, whatever the Text in it asks for (observed).
     // In Recent the state line ends with the row's buttons together at its right: one
     // to Today for an idle session not pinned, Dismiss for one that needs the person
-    // (in the Projects view too), then Pin, or Unpin. Kept together they
+    // (in the Projects view too), then Pin, or Unpin. Today and Older have Pin too,
+    // which brings the session up to Recent. Kept together they
     // read as the row's actions, and Pin lines up down the box. The name keeps its
     // line whole, so a long one does not push Pin out.
     const isRecent = recentAmong(rows)
@@ -2138,7 +2139,7 @@ export const register: Register = on => {
               {heading}
             </Text>
             {inBox.map(row => {
-              if (heading !== 'Recent') return session(row, false)
+              if (heading !== 'Recent') return session(row, false, 'Pin')
               const isPinned = pinned[row.id] !== undefined
               return session(row, !isPinned && isRested(row.filed), isPinned ? 'Unpin' : 'Pin')
             })}

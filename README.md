@@ -65,11 +65,12 @@ by your last message, newest first, with each session's project on a line of its
 A session with no message on record yet uses its last activity instead.
 
 An idle session in **Recent** with no background command running has **→ Today** at the right of its state line, which moves it to **Today**, for every session's pane.
-It goes back to **Recent** once you message it or it runs again, and to **Older** after midnight. The Projects view
+It goes back to **Recent** once you message it, it runs again or you pin it, and to **Older** after midnight. The Projects view
 and the state's color are unchanged.
 
 Each session in **Recent** ends its state line with **Pin**, which keeps it in **Recent**, in its place by time, until you
-press **Unpin**, for every session's pane. A pinned session has no **→ Today**. The Projects view and the state's color are
+press **Unpin**, for every session's pane. Each session in **Today** and **Older** has **Pin** too, which brings it up
+to **Recent**. A pinned session has no **→ Today**. The Projects view and the state's color are
 unchanged, so a pinned idle session older than Recent's 2 hours, with no background command running, draws dim.
 
 **🔊**, at the far right of the **Time** and **Projects** line, turns a sound on or off, for every session; it is off
